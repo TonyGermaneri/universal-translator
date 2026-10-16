@@ -111,7 +111,7 @@ Japanese flickers more because its verb comes last, so provisional words change 
 A borderless, non-activating `NSPanel` that never takes focus.
 
 - **Captions:**
-  - Roll-up (last N lines, measured with TextKit), stacked, or marquee layout.
+  - Marquee (the default: full width along the bottom of the screen), roll-up (last N lines, measured with TextKit), or stacked layout.
   - Marquee: one line scrolls across like a news ticker, toward where the language starts reading (left to right for Arabic and Hebrew). It moves at a steady speed (10 characters/s by default) and speeds up, to at most 30, while words wait off screen, so it keeps up with the speaker. The original speech scrolls on its own line. Auto-hide and auto-clear wait until the text has scrolled away.
   - Committed text at full strength, provisional words dimmed or italic, newly final words fade in.
   - Revised words get a brief highlight.

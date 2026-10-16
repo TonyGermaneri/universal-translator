@@ -257,12 +257,12 @@ struct OverlaySettings: Codable, Equatable {
     /// Window center as a fraction of the screen's visible frame (used when `anchor == .custom`).
     var customX: Double = 0.5
     var customY: Double = 0.15
-    var marginX: Double = 48
-    var marginY: Double = 64
-    var widthFraction: Double = 0.72
+    var marginX: Double = 0
+    var marginY: Double = 0
+    var widthFraction: Double = 1
 
     // Content
-    var layout: CaptionLayout = .rolling
+    var layout: CaptionLayout = .marquee
     var maxLines: Int = 2
     var showSource: Bool = true
     var sourceMaxLines: Int = 1
@@ -435,8 +435,13 @@ enum OverlayPreset: String, CaseIterable, Identifiable {
         (o.screenMode, o.screenName, o.level, o.clickThrough, o.allSpaces, o.hideFromScreenCapture) = keep
         switch self {
         case .subtitles:
-            break
+            // Roll-up captions in a centered block above the bottom edge.
+            o.layout = .rolling
+            o.widthFraction = 0.72
+            o.marginX = 48
+            o.marginY = 64
         case .lowerThird:
+            o.layout = .rolling
             o.anchor = .bottomLeading
             o.alignment = .leading
             o.widthFraction = 0.55
@@ -451,6 +456,7 @@ enum OverlayPreset: String, CaseIterable, Identifiable {
             o.marginY = 96
         case .teleprompter:
             o.anchor = .top
+            o.marginX = 48
             o.marginY = 40
             o.widthFraction = 0.8
             o.fontSize = 44
