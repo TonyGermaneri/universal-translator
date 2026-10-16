@@ -227,13 +227,15 @@ final class OverlayController: NSObject {
         let idle = Date().timeIntervalSince(captions.lastActivity)
         // Never hide or clear text before it's had time to be read.
         let reading = captions.readingTimeOfLatest(charactersPerSecond: o.readingSpeed)
-        if o.autoClearAfter > 0, captions.hasVisibleText, !captions.isSpeaking, captions.liveSource.isEmpty,
+        // Marquee text that is still crossing the screen isn't cut off either.
+        let scrolling = captions.isScrolling
+        if o.autoClearAfter > 0, captions.hasVisibleText, !captions.isSpeaking, captions.liveSource.isEmpty, !scrolling,
            captions.paragraph.last?.isFinished ?? true, idle > max(o.autoClearAfter, reading) {
             captions.clear()
         }
         let hasContent = captions.hasVisibleText || captions.status != .idle
         var show = !userHidden && (hasContent || layout.isUnlocked)
-        if show, o.autoHide, !layout.isUnlocked, !captions.isSpeaking, idle > max(o.autoHideDelay, reading) {
+        if show, o.autoHide, !layout.isUnlocked, !captions.isSpeaking, !scrolling, idle > max(o.autoHideDelay, reading) {
             if case .preparing = captions.status {} else { show = false }
         }
         guard show != isVisible else { return }

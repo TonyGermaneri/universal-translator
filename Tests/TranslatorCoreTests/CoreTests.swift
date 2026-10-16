@@ -249,3 +249,60 @@ private func words(_ text: String, start: Double = 0, final: Bool = true) -> [To
         #expect(PromptTemplate.gemma.render(system: "S", user: "U", prefix: "").hasSuffix("<start_of_turn>model\n"))
     }
 }
+
+@Suite struct MarqueeTapeTests {
+    private func tape() -> MarqueeTape<Int> { MarqueeTape(speed: 100, gap: 10) }
+
+    @Test func newTextEntersAtTheTrailingEdgeAndScrollsAway() {
+        var t = tape()
+        t.update([(1, 200)], viewport: 1000)
+        #expect(t.segments.first?.start == 1000)
+        for _ in 0..<600 { t.advance(by: 1.0 / 60, viewport: 1000) }
+        #expect(t.offset > 1000)
+        for _ in 0..<1200 { t.advance(by: 1.0 / 60, viewport: 1000) }
+        #expect(t.isEmpty)
+        // Gone for good, even though the caption paragraph still lists it.
+        t.update([(1, 200)], viewport: 1000)
+        #expect(t.isEmpty)
+    }
+
+    @Test func followingTextQueuesBehindAndGrowthPushesItAlong() {
+        var t = tape()
+        t.update([(1, 300), (2, 100)], viewport: 1000)
+        #expect(t.segments.map(\.start) == [1000, 1310])
+        t.update([(1, 400), (2, 100)], viewport: 1000)
+        #expect(t.segments.map(\.start) == [1000, 1410])
+    }
+
+    @Test func catchesUpWhenTextIsWaiting() {
+        var t = tape()
+        t.maximumSpeed = 600
+        t.update([(1, 3000)], viewport: 1000)
+        for _ in 0..<60 { t.advance(by: 1.0 / 60, viewport: 1000) }
+        #expect(t.velocity > 300)
+        #expect(t.velocity <= 600)
+        // Steady speed once nothing is waiting.
+        var calm = tape()
+        calm.update([(1, 100)], viewport: 1000)
+        for _ in 0..<600 { calm.advance(by: 1.0 / 60, viewport: 1000) }
+        #expect(abs(calm.velocity - 100) < 1)
+    }
+
+    @Test func aNewSentenceTakesOverTheLiveWordsPlace() {
+        var t = tape()
+        let live = -1
+        t.update([(1, 200), (live, 150)], viewport: 1000, transient: live)
+        let liveStart = t.segments[1].start
+        for _ in 0..<30 { t.advance(by: 1.0 / 60, viewport: 1000) }
+        // The live words became sentence 2; new live words follow it instead of jumping to the edge.
+        t.update([(1, 200), (2, 150), (live, 80)], viewport: 1000, transient: live)
+        #expect(t.segments.map(\.id) == [1, 2, live])
+        #expect(t.segments[1].start == liveStart)
+        #expect(t.segments[2].start == t.segments[1].end + 10)
+        // No live words: the transient segment goes away without blocking later ones.
+        t.update([(1, 200), (2, 150)], viewport: 1000, transient: live)
+        #expect(t.segments.map(\.id) == [1, 2])
+        t.update([(1, 200), (2, 150), (live, 60)], viewport: 1000, transient: live)
+        #expect(t.segments.last?.id == live)
+    }
+}

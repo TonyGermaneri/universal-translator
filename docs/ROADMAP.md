@@ -76,6 +76,7 @@ mic / system audio / one app ─▶ capture ─┬─▶ Endpointer: Silero VAD 
 - [x] Transcript window: the whole session with originals, follows the latest line until you scroll up, search, copy, export, text size, and revision markers.
 - [x] Pause/resume hotkey (⌃⌥⌘P) and menu item: audio is ignored while paused (models stay loaded), and the sentence in progress is finished.
 - [x] Privacy indicator: a lock (everything on this Mac) or network symbol (text sent to another host) in the overlay, the menu bar, and Settings.
+- [x] Marquee layout: a news-ticker line that scrolls toward where the target language starts reading. It runs at a steady speed and catches up when words are waiting (within about 1.5 s, at most 30 characters/s), with the original speech on its own line and a News ticker preset. Each frame only moves a pre-rendered strip of text: two lines at 120 Hz cost about 4% of a core.
 - [x] Reading-speed governor: rolling captions keep a line until it has been readable for its length at 17 characters/s (Chinese and Japanese characters count as two). The caption grows by up to one line instead; new words are never delayed. Auto-clear after 12 s of silence, never before the last caption has been read; auto-hide respects reading time too.
 
 ### Quality fixes found along the way

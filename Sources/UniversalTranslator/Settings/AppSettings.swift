@@ -169,9 +169,15 @@ enum BackgroundStyle: String, Codable, CaseIterable, Identifiable {
 }
 
 enum CaptionLayout: String, Codable, CaseIterable, Identifiable {
-    case rolling, stacked
+    case rolling, stacked, marquee
     var id: String { rawValue }
-    var title: String { self == .rolling ? "Rolling (live-caption style)" : "Stacked (one line per chunk)" }
+    var title: String {
+        switch self {
+        case .rolling: return "Rolling (live-caption style)"
+        case .stacked: return "Stacked (one line per chunk)"
+        case .marquee: return "Marquee (scrolling ticker)"
+        }
+    }
 }
 
 enum TextAnimationStyle: String, Codable, CaseIterable, Identifiable {
@@ -272,6 +278,9 @@ struct OverlaySettings: Codable, Equatable {
     /// Shows how far behind the speaker the translation is when it falls behind.
     var showLagIndicator: Bool = true
     var olderLineOpacity: Double = 0.7
+    /// Marquee layout: steady scroll speed in characters per second (Chinese and Japanese characters count as
+    /// two). It speeds up while words are waiting to come on screen.
+    var marqueeSpeed: Double = 10
     var alignment: AlignmentChoice = .center
 
     // Typography
@@ -404,7 +413,7 @@ struct AppSettings: Codable, Equatable {
 // MARK: - Overlay presets
 
 enum OverlayPreset: String, CaseIterable, Identifiable {
-    case subtitles, lowerThird, teleprompter, minimal, highContrast
+    case subtitles, lowerThird, teleprompter, ticker, minimal, highContrast
 
     var id: String { rawValue }
     var title: String {
@@ -412,6 +421,7 @@ enum OverlayPreset: String, CaseIterable, Identifiable {
         case .subtitles: return "Subtitles"
         case .lowerThird: return "Broadcast lower third"
         case .teleprompter: return "Teleprompter"
+        case .ticker: return "News ticker"
         case .minimal: return "Minimal outline"
         case .highContrast: return "High contrast"
         }
@@ -448,6 +458,19 @@ enum OverlayPreset: String, CaseIterable, Identifiable {
             o.layout = .rolling
             o.backgroundColor = RGBA(0, 0, 0, 0.78)
             o.sourceMaxLines = 2
+        case .ticker:
+            o.layout = .marquee
+            o.anchor = .bottom
+            o.widthFraction = 1
+            o.marginX = 0
+            o.marginY = 0
+            o.fontSize = 30
+            o.fontWeight = .bold
+            o.backgroundColor = RGBA(0.04, 0.06, 0.12, 0.88)
+            o.backgroundBlur = false
+            o.cornerRadius = 0
+            o.paddingV = 10
+            o.showSource = false
         case .minimal:
             o.backgroundStyle = .none
             o.strokeWidth = 2.5

@@ -111,11 +111,12 @@ Japanese flickers more because its verb comes last, so provisional words change 
 A borderless, non-activating `NSPanel` that never takes focus.
 
 - **Captions:**
-  - Roll-up (last N lines, measured with TextKit) or stacked layout.
+  - Roll-up (last N lines, measured with TextKit), stacked, or marquee layout.
+  - Marquee: one line scrolls across like a news ticker, toward where the language starts reading (left to right for Arabic and Hebrew). It moves at a steady speed (10 characters/s by default) and speeds up, to at most 30, while words wait off screen, so it keeps up with the speaker. The original speech scrolls on its own line. Auto-hide and auto-clear wait until the text has scrolled away.
   - Committed text at full strength, provisional words dimmed or italic, newly final words fade in.
   - Revised words get a brief highlight.
   - Optional original-language line, a "behind" badge when translation lags, and a "Paused" badge.
-  - Respects Reduce Motion.
+  - Respects Reduce Motion (the marquee shows rolling captions instead).
 - **Readability:**
   - A reading-speed limit (17 characters/s by default; Chinese and Japanese characters count as two). A line that hasn't been on screen long enough to read stays, and the caption grows by a line instead.
   - Captions clear after 12 s of silence, but never before the last one has been read.
@@ -127,7 +128,7 @@ A borderless, non-activating `NSPanel` that never takes focus.
   - Stays above apps, above the menu bar, or above everything including full-screen apps.
   - Click-through when locked; all Spaces; can be hidden from screen recording; auto-hides when idle.
 - **Typography and background:** any font, size, weight and colour; outline; shadow; box or no background; blur; corner radius; padding; border; opacity.
-- **Presets:** Subtitles, Broadcast lower third, Teleprompter, Minimal outline, High contrast. Settings export and import as JSON.
+- **Presets:** Subtitles, Broadcast lower third, Teleprompter, News ticker, Minimal outline, High contrast. Settings export and import as JSON.
 
 ## Transcript, shortcuts and menu
 

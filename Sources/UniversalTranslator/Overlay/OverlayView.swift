@@ -26,7 +26,8 @@ struct OverlayRootView: View {
         VStack(alignment: o.alignment.horizontal, spacing: 0) {
             if showsContent {
                 CaptionBox(o: o, captions: captions, privacy: PrivacyStatus.of(settings.settings), isUnlocked: layout.isUnlocked,
-                           textWidth: layout.width - (o.backgroundStyle == .box ? 2 * o.paddingH : 0))
+                           textWidth: layout.width - (o.backgroundStyle == .box ? 2 * o.paddingH : 0),
+                           direction: .init(source: settings.settings.sourceLocale, target: settings.settings.targetLanguage))
                     .frame(maxWidth: o.backgroundStyle == .box && !fixedWidth ? nil : .infinity, alignment: o.alignment.frame)
             }
         }
@@ -88,26 +89,49 @@ struct CaptionBox: View {
     let isUnlocked: Bool
     /// Widest the text can be laid out, used to keep only the last N lines of rolling captions.
     let textWidth: CGFloat
+    let direction: TextDirections
+    @State private var marquee = MarqueeState()
+
+    /// Which way each language reads, so the marquee scrolls toward where its text starts.
+    struct TextDirections {
+        var sourceRightToLeft = false
+        var targetRightToLeft = false
+
+        init(source: String, target: String) {
+            sourceRightToLeft = Locale.Language(identifier: source).characterDirection == .rightToLeft
+            targetRightToLeft = Locale.Language(identifier: target).characterDirection == .rightToLeft
+        }
+    }
 
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// A scrolling ticker would ignore Reduce Motion, so captions roll instead.
+    private var isMarquee: Bool { o.layout == .marquee && !reduceMotion }
 
     var body: some View {
-        // Re-render at animation rate only while words are fading in or a revision is highlighted.
         let _ = captions.effectsVersion
         let _ = captions.refreshVersion
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !captions.hasActiveEffects(at: Date()))) { context in
-            content(now: context.date)
+        if isMarquee {
+            // Each marquee line runs its own timeline.
+            let _ = syncMarquee()
+            content(now: Date())
+        } else {
+            // Re-render at animation rate only while words are fading in or a revision is highlighted.
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !captions.hasActiveEffects(at: Date()))) { context in
+                content(now: context.date)
+            }
         }
     }
 
     private func content(now: Date) -> some View {
-        VStack(alignment: o.alignment.horizontal, spacing: o.fontSize * 0.18) {
-            if o.showSource, o.sourceAbove, !sourceLine.isEmpty { source }
+        let showsSource = o.showSource && (isMarquee ? !marquee.source.isEmpty : !sourceLine.isEmpty)
+        return VStack(alignment: o.alignment.horizontal, spacing: o.fontSize * 0.18) {
+            if showsSource, o.sourceAbove { source(now: now) }
             translation(now: now)
-            if o.showSource, !o.sourceAbove, !sourceLine.isEmpty { source }
+            if showsSource, !o.sourceAbove { source(now: now) }
         }
         .multilineTextAlignment(o.alignment.text)
-        .padding(.horizontal, o.backgroundStyle == .box ? o.paddingH : 0)
+        // The marquee runs to the box edges and fades out there.
+        .padding(.horizontal, o.backgroundStyle == .box && !isMarquee ? o.paddingH : 0)
         .padding(.vertical, o.backgroundStyle == .box ? o.paddingV : 0)
         .frame(minWidth: o.backgroundStyle == .box ? o.fontSize * 3 : 0)
         .background { background }
@@ -258,31 +282,35 @@ struct CaptionBox: View {
 
     // MARK: Translation
 
-    private var statusMessage: String? {
+    private func statusMessage(hasText: Bool) -> String? {
         switch captions.status {
         case .preparing(let message): return message
         case .error(let message): return message
-        case .listening where !captions.hasVisibleText: return isUnlocked ? "Caption preview" : "Listening…"
-        case .paused where !captions.hasVisibleText: return "Paused"
-        case .idle where isUnlocked && !captions.hasVisibleText: return "Caption preview"
+        case .listening where !hasText: return isUnlocked ? "Caption preview" : "Listening…"
+        case .paused where !hasText: return "Paused"
+        case .idle where isUnlocked && !hasText: return "Caption preview"
         default: return nil
         }
     }
 
     @ViewBuilder private func translation(now: Date) -> some View {
-        if let statusMessage {
+        let hasText = isMarquee ? marquee.hasText(includingSource: o.showSource) : captions.hasVisibleText
+        if let statusMessage = statusMessage(hasText: hasText) {
             styled { color in
                 Text(statusMessage).foregroundColor(color ?? o.textColor.color.opacity(0.7))
             }
             .font(font(scale: 0.6))
-        } else if o.layout == .rolling {
+            .padding(.horizontal, isMarquee && o.backgroundStyle == .box ? o.paddingH : 0)
+        } else if isMarquee {
+            marqueeLane(.translation)
+        } else if o.layout == .stacked {
+            stackedLines(now: now)
+        } else {
             let visible = fitted(runs(now: now), maxLines: o.maxLines)
             styled { color in Text(attributed(visible, override: color)) }
                 .fixedSize(horizontal: false, vertical: true)
                 .font(font(scale: 1))
                 .transaction { $0.animation = nil }
-        } else {
-            stackedLines(now: now)
         }
     }
 
@@ -317,7 +345,15 @@ struct CaptionBox: View {
         return TextJoiner.join(committed, captions.liveSource)
     }
 
-    private var source: some View {
+    @ViewBuilder private func source(now: Date) -> some View {
+        if isMarquee {
+            marqueeLane(.source)
+        } else {
+            rolledSource
+        }
+    }
+
+    private var rolledSource: some View {
         let text = CaptionFitter.recentTail(sourceLine)
         let attributed = NSAttributedString(string: text, attributes: [
             .font: nsFont(scale: o.sourceScale, weight: .regular), .paragraphStyle: paragraphStyle,
@@ -330,6 +366,206 @@ struct CaptionBox: View {
         .fixedSize(horizontal: false, vertical: true)
         .font(font(scale: o.sourceScale, weight: .regular))
         .transaction { $0.animation = nil }
+    }
+
+    // MARK: Marquee
+
+    /// The full overlay width: the marquee runs to the box edges.
+    private var marqueeWidth: CGFloat { textWidth + (o.backgroundStyle == .box ? 2 * o.paddingH : 0) }
+
+    /// Width over which text fades in and out at the ends of the marquee.
+    private var marqueeFade: CGFloat { max(o.fontSize * 0.8, o.backgroundStyle == .box ? o.paddingH : 0) }
+
+    /// Brings the tapes up to date with the captions; returns whether there is anything on them.
+    private func syncMarquee() -> Bool {
+        let m = marquee
+        if m.clearCount != captions.clearCount {
+            m.reset()
+            m.clearCount = captions.clearCount
+        }
+        let fontKey = "\(o.fontFamily)|\(o.fontSize)|\(o.fontWeight)|\(o.provisionalItalic)|\(o.sourceScale)|\(o.showProvisional)"
+        if m.fontKey != fontKey {
+            m.widths = [:]
+            m.fontKey = fontKey
+        }
+        let viewport = Double(marqueeWidth)
+        // The speed setting is in characters per second; an average character is about half an em wide. Catching
+        // up never goes past 30 characters per second, which is about as fast as moving text can be read. The
+        // original speech moves with the translation so the two lines don't drift apart.
+        for lane in [MarqueeState.Lane.translation, .source] {
+            var tape = m.tape(lane)
+            tape.speed = o.marqueeSpeed * 0.5 * o.fontSize
+            tape.maximumSpeed = max(tape.speed, 30 * 0.5 * o.fontSize)
+            tape.gap = o.fontSize * 0.4 * (lane == .translation ? 1 : o.sourceScale)
+            tape.trailingInset = Double(marqueeFade)
+            m.setTape(lane, tape)
+        }
+
+        var translations: [(id: UUID, width: Double)] = []
+        var sources: [(id: UUID, width: Double)] = []
+        for sentence in paragraph {
+            // Sentences that already scrolled away stay listed (so they aren't shown again) but aren't measured.
+            if m.translation.hasScrolledAway(sentence.id) {
+                translations.append((sentence.id, 0))
+            } else {
+                m.sentences[sentence.id] = sentence
+                let runs = marqueeRuns(sentence, now: .distantFuture)
+                if !runs.isEmpty {
+                    let key = runs.map { run in run.text + (isGhost(run) ? "\u{1}" : "") }.joined()
+                    translations.append((sentence.id, m.width(.translation, sentence.id, key: key) { measure(runs, scale: 1) }))
+                }
+            }
+            if m.source.hasScrolledAway(sentence.id) {
+                sources.append((sentence.id, 0))
+            } else if o.showSource, !sentence.source.isEmpty {
+                m.sentences[sentence.id] = sentence
+                sources.append((sentence.id, m.width(.source, sentence.id, key: sentence.source) {
+                    measure([Run(text: sentence.source, kind: .committed)], scale: o.sourceScale, weight: .regular)
+                }))
+            }
+        }
+        m.translation.update(translations, viewport: viewport)
+        if o.showSource {
+            m.liveSource = captions.liveSource
+            if !m.liveSource.isEmpty {
+                let text = m.liveSource
+                sources.append((MarqueeState.liveID, m.width(.source, MarqueeState.liveID, key: text) {
+                    measure([Run(text: text, kind: .committed)], scale: o.sourceScale, weight: .regular)
+                }))
+            }
+            m.source.update(sources, viewport: viewport, transient: MarqueeState.liveID)
+        } else if !m.source.isEmpty {
+            m.source.reset()
+        }
+        m.prune()
+        return m.hasText(includingSource: o.showSource)
+    }
+
+    private func marqueeRuns(_ sentence: CaptionStore.Sentence, now: Date) -> [Run] {
+        var runs = sentenceRuns(sentence, now: now)
+        if !o.showProvisional { runs.removeAll(where: isGhost) }
+        return runs
+    }
+
+    private func isGhost(_ run: Run) -> Bool {
+        if case .ghost = run.kind { return true }
+        return false
+    }
+
+    /// Natural single-line width of styled runs.
+    private func measure(_ runs: [Run], scale: Double, weight: NSFont.Weight? = nil) -> Double {
+        let measured = NSMutableAttributedString()
+        for run in runs {
+            measured.append(NSAttributedString(string: run.text, attributes: [
+                .font: nsFont(scale: scale, weight: weight, italic: isGhost(run) && o.provisionalItalic),
+            ]))
+        }
+        return Double(ceil(measured.size().width))
+    }
+
+    /// One scrolling line. Its timeline only moves a strip of text; the strip re-renders when the text changes
+    /// (or while words fade in), which keeps scrolling cheap.
+    private func marqueeLane(_ lane: MarqueeState.Lane) -> some View {
+        let scale = lane == .translation ? 1 : o.sourceScale
+        let rightToLeft = lane == .translation ? direction.targetRightToLeft : direction.sourceRightToLeft
+        let viewport = Double(marqueeWidth)
+        // Room above and below the line for the outline and shadow, which the edge fade would otherwise clip.
+        let bleed = o.strokeWidth + (o.shadowEnabled ? o.shadowRadius : 0) + o.fontSize * scale * 0.25
+        return Text(verbatim: "Ag")
+            .font(font(scale: scale))
+            .hidden()
+            .frame(width: marqueeWidth)
+            .overlay(alignment: .leading) {
+                TimelineView(.animation(paused: marquee.tape(lane).isEmpty)) { context in
+                    let tape = stepMarquee(lane, now: context.date)
+                    let origin = tape.segments.first?.start ?? tape.offset
+                    let effects = lane == .translation && captions.hasActiveEffects(at: context.date)
+                    MarqueeStrip(box: self, lane: lane, rightToLeft: rightToLeft, effectsAt: effects ? context.date : nil,
+                                 pieces: tape.segments.map { .init(id: $0.id, start: $0.start - origin, width: $0.width) },
+                                 sentences: lane == .translation ? tape.segments.map { marquee.sentences[$0.id] } : [],
+                                 texts: lane == .source ? tape.segments.map { marquee.sourceText($0.id) } : [])
+                        .equatable()
+                        .offset(x: rightToLeft ? viewport + tape.offset - origin : origin - tape.offset)
+                }
+            }
+            .padding(.vertical, bleed)
+            .mask { edgeFade }
+            .padding(.vertical, -bleed)
+            .transaction { $0.animation = nil }
+    }
+
+    /// Moves a tape on to `now` and tells the overlay how long text will still be crossing the screen.
+    private func stepMarquee(_ lane: MarqueeState.Lane, now: Date) -> MarqueeTape<UUID> {
+        let m = marquee
+        let time = now.timeIntervalSinceReferenceDate
+        var dt = m.lastFrame[lane].map { time - $0 } ?? 0
+        if dt > 0.25 { dt = 1.0 / 60 } // the timeline was paused
+        m.lastFrame[lane] = time
+        let wasMoving = !m.tape(lane).isEmpty
+        let viewport = Double(marqueeWidth)
+        switch lane {
+        case .translation: m.translation.advance(by: dt, viewport: viewport)
+        case .source: m.source.advance(by: dt, viewport: viewport)
+        }
+        let remaining = max(m.translation.remainingTime, m.source.remainingTime)
+        let uptime = ProcessInfo.processInfo.systemUptime
+        captions.scrollingUntil = remaining > 0 ? uptime + remaining : 0
+        // Everything has scrolled away: render once more so the timeline pauses.
+        if wasMoving, m.tape(lane).isEmpty { captions.scheduleRefresh(at: uptime + 0.02) }
+        return m.tape(lane)
+    }
+
+    /// A marquee line's text at fixed places along the tape. Equal strips aren't rendered again.
+    private struct MarqueeStrip: View, Equatable {
+        struct Piece: Equatable {
+            let id: UUID
+            let start: Double
+            let width: Double
+        }
+
+        let box: CaptionBox
+        let lane: MarqueeState.Lane
+        let rightToLeft: Bool
+        /// Set while words are fading in or a revision is highlighted.
+        let effectsAt: Date?
+        let pieces: [Piece]
+        let sentences: [CaptionStore.Sentence?]
+        let texts: [String]
+
+        static func == (a: Self, b: Self) -> Bool {
+            a.lane == b.lane && a.rightToLeft == b.rightToLeft && a.effectsAt == b.effectsAt && a.pieces == b.pieces
+                && a.sentences == b.sentences && a.texts == b.texts && a.box.o == b.box.o
+        }
+
+        var body: some View {
+            ZStack(alignment: .leading) {
+                ForEach(Array(pieces.enumerated()), id: \.element.id) { i, piece in
+                    segment(i)
+                        .fixedSize()
+                        .offset(x: rightToLeft ? -piece.start - piece.width : piece.start)
+                }
+            }
+        }
+
+        @ViewBuilder private func segment(_ i: Int) -> some View {
+            let o = box.o
+            if lane == .translation {
+                let runs = sentences[i].map { box.marqueeRuns($0, now: effectsAt ?? .distantFuture) } ?? []
+                box.styled { color in Text(box.attributed(runs, override: color)) }
+                    .font(box.font(scale: 1))
+            } else {
+                box.styled { color in Text(texts[i]).foregroundColor(color ?? o.sourceColor.color) }
+                    .font(box.font(scale: o.sourceScale, weight: .regular))
+            }
+        }
+    }
+
+    private var edgeFade: some View {
+        HStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: marqueeFade)
+            Rectangle().fill(.black)
+            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: marqueeFade)
+        }
     }
 
     // MARK: Styling

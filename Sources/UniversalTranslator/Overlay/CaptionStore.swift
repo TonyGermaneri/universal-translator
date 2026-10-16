@@ -69,6 +69,10 @@ final class CaptionStore {
     private(set) var refreshVersion = 0
     @ObservationIgnored private var refreshWork: DispatchWorkItem?
     @ObservationIgnored private var refreshAt: Double = .infinity
+    /// Bumped when the captions are cleared on purpose (not by a paragraph break), so the marquee empties too.
+    private(set) var clearCount = 0
+    /// System uptime until which the marquee still has text scrolling across (for auto-hide and auto-clear).
+    @ObservationIgnored var scrollingUntil: Double = 0
 
     /// Re-renders the overlay at `uptime` (system uptime seconds).
     func scheduleRefresh(at uptime: Double) {
@@ -85,6 +89,9 @@ final class CaptionStore {
         refreshWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + (uptime - now) + 0.02, execute: work)
     }
+
+    /// Whether the marquee still has text on screen.
+    var isScrolling: Bool { scrollingUntil > ProcessInfo.processInfo.systemUptime }
 
     /// Reading time of the newest caption text on screen (for auto-hide and auto-clear).
     func readingTimeOfLatest(charactersPerSecond: Double) -> Double {
@@ -245,6 +252,8 @@ final class CaptionStore {
         isDemo = false
         paragraphStart = sentences.count
         liveSource = ""
+        clearCount += 1
+        scrollingUntil = 0
         touch()
     }
 
@@ -254,6 +263,8 @@ final class CaptionStore {
         liveSource = ""
         isDemo = false
         lag = 0
+        clearCount += 1
+        scrollingUntil = 0
         sessionStart = Date()
     }
 

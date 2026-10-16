@@ -83,7 +83,9 @@ struct AppearanceSettings: View {
                     .pickerStyle(.segmented)
                     SliderRow(title: "Relative size", value: $store.settings.overlay.sourceScale, range: 0.3...1, format: Fmt.percent)
                     ColorRow(title: "Color", color: $store.settings.overlay.sourceColor)
-                    Stepper("Lines: \(store.settings.overlay.sourceMaxLines)", value: $store.settings.overlay.sourceMaxLines, in: 1...4)
+                    if store.settings.overlay.layout != .marquee {
+                        Stepper("Lines: \(store.settings.overlay.sourceMaxLines)", value: $store.settings.overlay.sourceMaxLines, in: 1...4)
+                    }
                 }
             }
 
@@ -160,7 +162,14 @@ struct LayoutSettings: View {
                 Picker("Layout", selection: $store.settings.overlay.layout) {
                     ForEach(CaptionLayout.allCases) { Text($0.title).tag($0) }
                 }
-                Stepper("Translation lines: \(store.settings.overlay.maxLines)", value: $store.settings.overlay.maxLines, in: 1...8)
+                if store.settings.overlay.layout == .marquee {
+                    SliderRow(title: "Scroll speed", value: $store.settings.overlay.marqueeSpeed, range: 4...30, step: 1,
+                              format: { String(format: "%.0f characters/s", $0) },
+                              help: "How fast the text moves once it has caught up with the speaker (Chinese and Japanese characters count as two). It speeds up while words are waiting to come on screen, so it keeps up with the speaker.")
+                    Note("One line of text crosses the screen like a news ticker; the original speech gets its own line. With Reduce Motion on, captions roll instead.")
+                } else {
+                    Stepper("Translation lines: \(store.settings.overlay.maxLines)", value: $store.settings.overlay.maxLines, in: 1...8)
+                }
                 if store.settings.overlay.layout == .stacked {
                     SliderRow(title: "Older line opacity", value: $store.settings.overlay.olderLineOpacity, range: 0.2...1, format: Fmt.percent)
                 }
