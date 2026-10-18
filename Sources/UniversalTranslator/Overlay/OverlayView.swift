@@ -305,6 +305,8 @@ struct CaptionBox: View {
             }
             .font(font(scale: 0.6))
             .padding(.horizontal, isMarquee && o.backgroundStyle == .box ? o.paddingH : 0)
+            // Across the caption width, so the lag badge in the corner doesn't sit on top of it.
+            .frame(maxWidth: o.backgroundStyle == .box ? nil : .infinity, alignment: o.alignment.frame)
         } else if isMarquee {
             marqueeLane(.translation)
         } else if o.layout == .stacked {

@@ -37,6 +37,25 @@ private func words(_ text: String, start: Double = 0, final: Bool = true) -> [To
 }
 
 @Suite struct TranscriptTests {
+    @Test func resultsWithoutLeadingSpaceStayApart() {
+        // Nemotron starts each turn's text without a space.
+        var buffer = TranscriptBuffer()
+        buffer.applyFinal(words("Thanks for coming in today."), rangeEnd: 1.5)
+        buffer.applyFinal(words("I wanted to talk", start: 2), rangeEnd: 3.2)
+        buffer.applyVolatile(words("about the plan", start: 3.3, final: false))
+        #expect(buffer.allTokens.map(\.text).joined() == "Thanks for coming in today. I wanted to talk about the plan")
+
+        var japanese = TranscriptBuffer()
+        japanese.applyFinal([Token(text: "今日は", start: 0, end: 0.5, isFinal: true)], rangeEnd: 0.5)
+        japanese.applyFinal([Token(text: "ありがとう", start: 0.6, end: 1, isFinal: true)], rangeEnd: 1)
+        #expect(japanese.allTokens.map(\.text).joined() == "今日はありがとう")
+
+        var punctuation = TranscriptBuffer()
+        punctuation.applyFinal(words("Hello"), rangeEnd: 0.3)
+        punctuation.applyFinal([Token(text: ", world", start: 0.4, end: 0.8, isFinal: true)], rangeEnd: 0.8)
+        #expect(punctuation.allTokens.map(\.text).joined() == "Hello, world")
+    }
+
     @Test func splitsRunsIntoWordsWithInterpolatedTimes() {
         let t = Tokenizer.tokens(
             from: [TimedPiece(text: "Hello world,", start: 1.0, end: 2.1), TimedPiece(text: " again", start: 2.2, end: 2.6)],

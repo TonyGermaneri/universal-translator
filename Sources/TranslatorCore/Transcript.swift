@@ -140,7 +140,7 @@ public struct TranscriptBuffer: Sendable {
         volatileTokens.removeFirst(min(covered, volatileTokens.count))
         previousVolatile = []
         agreedVolatileCount = 0
-        finalTokens.append(contentsOf: tokens)
+        finalTokens.append(contentsOf: Self.separated(tokens, after: finalTokens.last))
         finalizedThrough = max(finalizedThrough, rangeEnd, tokens.last?.end ?? 0)
         settle()
     }
@@ -148,8 +148,22 @@ public struct TranscriptBuffer: Sendable {
     public mutating func applyVolatile(_ tokens: [Token], rangeEnd: Double? = nil) {
         if let rangeEnd { volatileThrough = max(volatileThrough, rangeEnd) }
         previousVolatile = volatileTokens
-        volatileTokens = tokens
+        volatileTokens = Self.separated(tokens, after: finalTokens.last)
         agreedVolatileCount = Self.agreementPrefix(volatileTokens, previousVolatile)
+    }
+
+    /// Puts a space before a result that starts right after the previous one's last word. Nemotron's text for each
+    /// turn starts without one, so a sentence spanning two turns read "todayI wanted"; scripts written without
+    /// spaces, and results that start with punctuation, are left as they are.
+    static func separated(_ tokens: [Token], after previous: Token?) -> [Token] {
+        guard let previous, let first = tokens.first,
+              let l = previous.text.unicodeScalars.last, let r = first.text.unicodeScalars.first,
+              !CharacterSet.whitespacesAndNewlines.contains(l), !CharacterSet.whitespacesAndNewlines.contains(r),
+              !CharacterSet.punctuationCharacters.contains(r),
+              !TextJoiner.isSpacelessScript(l), !TextJoiner.isSpacelessScript(r) else { return tokens }
+        var result = tokens
+        result[0].text = " " + first.text
+        return result
     }
 
     /// Words not yet committed, and how many of them (from the front) are stable enough to commit.
