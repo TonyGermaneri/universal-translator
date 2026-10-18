@@ -49,7 +49,8 @@ if [[ -z "$DEVICE" ]]; then
 fi
 
 echo "Building for device $DEVICE"
-xcodebuild build "${FLAGS[@]}" -destination "id=$DEVICE" -allowProvisioningUpdates -quiet
+# Registers the device with the team the first time, as Xcode's Run button does.
+xcodebuild build "${FLAGS[@]}" -destination "id=$DEVICE" -allowProvisioningUpdates -allowProvisioningDeviceRegistration -quiet
 APP=".build/ios/Build/Products/Release-iphoneos/Universal Translator.app"
 echo "Built $APP"
 

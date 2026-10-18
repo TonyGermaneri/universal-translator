@@ -2,7 +2,10 @@ import Foundation
 
 /// Appends timestamped lines to the file named by `UT_DEBUG_LOG` (no-op otherwise). Used for testing.
 enum DebugLog {
-    private static let url = ProcessInfo.processInfo.environment["UT_DEBUG_LOG"].map { URL(fileURLWithPath: $0) }
+    /// "~" is the app's own folder on iOS.
+    private static let url = ProcessInfo.processInfo.environment["UT_DEBUG_LOG"].map {
+        URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+    }
     private static let start = Date()
     private static let queue = DispatchQueue(label: "debug-log")
 

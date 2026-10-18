@@ -26,7 +26,22 @@ final class AppController {
         settings.settings.hasCompletedFirstRun = true
     }
 
+    /// Turns the microphone on or off. Turning it on starts a new session: the notepad, the transcript and its
+    /// export begin again from there. Pausing, the app going to the background, and a settings change that
+    /// restarts the engine all continue the same session.
+    func toggleListening() {
+        if controller.isListening {
+            controller.stop()
+        } else {
+            captions.resetSession()
+            controller.start()
+        }
+    }
+
+    /// Sample captions for previewing the appearance settings. They'd replace the session's text, so they're only
+    /// shown when there's none.
     func showSampleCaptions() {
+        guard !controller.isListening, captions.isDemo || captions.sessionEntries.isEmpty else { return }
         captions.showDemo(targetLanguage: settings.settings.targetLanguage)
     }
 

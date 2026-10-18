@@ -21,7 +21,8 @@ final class NemotronRecognizer: SpeechRecognizer {
 
     private enum Item {
         case audio([Float])
-        case endTurn
+        /// Carries where the speaker stopped, when known.
+        case endTurn(Double?)
         case reset
     }
 
@@ -88,7 +89,7 @@ final class NemotronRecognizer: SpeechRecognizer {
                         emit(RecognizerResult(pieces: [TimedPiece(text: text, start: nil, end: nil)], isFinal: false,
                                               start: turnStart, end: fed - Double(streamSamples % chunkSamples) / 16_000))
                     }
-                case .endTurn:
+                case .endTurn(let endOfSpeech):
                     let started = ProcessInfo.processInfo.systemUptime
                     let padding = (chunkSamples - streamSamples % chunkSamples) % chunkSamples
                     if padding > 0 {
@@ -101,7 +102,7 @@ final class NemotronRecognizer: SpeechRecognizer {
                     DebugLog.write(String(format: "NEMOTRON turn %.0f ms | %@",
                                           (ProcessInfo.processInfo.systemUptime - started) * 1000, text))
                     emit(RecognizerResult(pieces: [TimedPiece(text: text, start: nil, end: nil)], isFinal: true,
-                                          start: turnStart, end: fed))
+                                          start: turnStart, end: fed, endOfSpeech: endOfSpeech))
                     turnStart = fed
                     partial = ""
                 case .reset:
@@ -146,7 +147,7 @@ final class NemotronRecognizer: SpeechRecognizer {
 
     func turnEnded(at endOfSpeech: Double) {
         resetWork?.cancel()
-        feed?.yield(.endTurn)
+        feed?.yield(.endTurn(endOfSpeech))
     }
 
     func longPause(after endOfSpeech: Double) {
@@ -159,7 +160,7 @@ final class NemotronRecognizer: SpeechRecognizer {
 
     func finish() async {
         resetWork?.cancel()
-        feed?.yield(.endTurn)
+        feed?.yield(.endTurn(nil))
         feed?.finish()
         feed = nil
         if let worker {

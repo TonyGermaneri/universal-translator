@@ -129,7 +129,8 @@ final class AudioCapture {
     func start(settings: AppSettings) throws {
         if let path = ProcessInfo.processInfo.environment["UT_AUDIO_FILE"], let onBuffer {
             // Debug/test hook: stream an audio file in real time instead of the microphone.
-            fileSource = try FileAudioSource(url: URL(fileURLWithPath: path), onBuffer: onBuffer)
+            // "~" is the app's own folder on iOS, where a test file can be copied.
+            fileSource = try FileAudioSource(url: URL(fileURLWithPath: (path as NSString).expandingTildeInPath), onBuffer: onBuffer)
             fileSource?.start()
             return
         }

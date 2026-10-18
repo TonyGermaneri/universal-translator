@@ -16,6 +16,7 @@ struct SettingsScreen: View {
             Form {
                 LanguagePickers(store: app.settings)
                 ListeningSettings(store: app.settings, captions: app.captions)
+                NotepadSettings()
                 Section {
                     NavigationLink {
                         TranslationSettingsView(store: app.settings).navigationTitle("Translation")

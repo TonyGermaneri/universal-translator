@@ -15,6 +15,9 @@ final class CaptionStore {
         /// Provisional translation of the rest of the sentence so far; may change on every update.
         var ghost = ""
         var isFinished = false
+        /// Where its speech ended on the audio timeline (seconds). A long pause in `pauses` starting there puts a
+        /// paragraph break after it in the iPhone and iPad notepad.
+        var speechEnd: Double?
         var startedAt: Date
         var finishedAt: Date?
         /// When `committed` last grew, and how long it was before (for fading new words in).
@@ -42,6 +45,9 @@ final class CaptionStore {
     }
 
     private(set) var sentences: [Sentence] = []
+    /// Where long pauses (`paragraphBreak` seconds or more) began on the audio timeline; the iPhone and iPad notepad
+    /// starts a paragraph after the sentence that ended there.
+    private(set) var pauses: [Double] = []
     /// Index of the first sentence of the paragraph currently on screen.
     private(set) var paragraphStart = 0
     /// Recognized words not yet part of a sentence being translated (still settling).
@@ -157,8 +163,9 @@ final class CaptionStore {
     }
 
     /// Finishes the sentence in progress. When the final translation doesn't continue what was committed
-    /// (`replaced`), the change is highlighted like a revision instead of swapping text silently.
-    func finishCurrent(source: String, translation: String, replaced: Bool = false) {
+    /// (`replaced`), the change is highlighted like a revision instead of swapping text silently. `speechEnd`: where
+    /// its speech ended on the audio timeline.
+    func finishCurrent(source: String, translation: String, replaced: Bool = false, speechEnd: Double? = nil) {
         guard let i = sentences.indices.last, !sentences[i].isFinished else { return }
         var s = sentences[i]
         if replaced, !s.committed.isEmpty {
@@ -173,7 +180,9 @@ final class CaptionStore {
         s.ghost = ""
         s.isFinished = true
         s.finishedAt = Date()
+        s.speechEnd = speechEnd
         sentences[i] = s
+        DebugLog.write(String(format: "SENTENCE speech end %.2f | %@", s.speechEnd ?? -1, source))
         touch()
     }
 
@@ -252,6 +261,14 @@ final class CaptionStore {
         paragraphStart = sentences.count
     }
 
+    /// Records a long pause that began at `start` on the audio timeline (reported on every tick while it lasts).
+    func notePause(startingAt start: Double) {
+        guard pauses.last.map({ abs($0 - start) > 0.5 }) ?? true else { return }
+        pauses.append(start)
+        DebugLog.write(String(format: "PAUSE from %.2f", start))
+        if pauses.count > 5000 { pauses.removeFirst(500) }
+    }
+
     /// The next sentence starts a fresh paragraph; until then the old one stays readable.
     func requestParagraphBreak() {
         if paragraphStart < sentences.count { pendingBreak = true }
@@ -268,6 +285,7 @@ final class CaptionStore {
 
     func resetSession() {
         sentences = []
+        pauses = []
         paragraphStart = 0
         liveSource = ""
         isDemo = false

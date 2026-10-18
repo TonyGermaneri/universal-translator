@@ -52,6 +52,9 @@ final class SpeechPipeline: SpeechEngine {
     /// "the database"); the text is only complete once the burst is over.
     static let burstGap = 0.1
     private var lastResultAt: Double = 0
+    /// Where the speaker stopped at the end of recent turns, keyed by the estimated end time of each turn's last
+    /// word (for recognizers whose word times are estimates; see `RecognizerResult.endOfSpeech`).
+    private var turnEnds: [(lastWordEnd: Double, endOfSpeech: Double)] = []
     /// Shared with the audio thread: drop audio while paused.
     private let paused = OSAllocatedUnfairLock(initialState: false)
     private var pausedAt: Double?
@@ -177,11 +180,22 @@ final class SpeechPipeline: SpeechEngine {
                 "\(p.text)@\(p.start.map { String(format: "%.2f", $0) } ?? "-")-\(p.end.map { String(format: "%.2f", $0) } ?? "-")"
             }.joined(separator: "|"))
             transcript.applyFinal(tokens, rangeEnd: result.end)
+            if let endOfSpeech = result.endOfSpeech, let last = tokens.last {
+                turnEnds.append((last.end, endOfSpeech))
+                if turnEnds.count > 100 { turnEnds.removeFirst(50) }
+            }
             reportSettled()
         } else {
             transcript.applyVolatile(tokens, rangeEnd: result.end)
         }
         evaluate()
+    }
+
+    /// Where the speaker stopped at the end of a complete sentence: the end of its turn when the sentence closes one
+    /// (`boundary` may already be a later turn's when recognition runs behind), otherwise its last word's end.
+    private func speechEnd(of sentence: SourceFrontier.Sentence) -> Double? {
+        guard let last = sentence.tokens.last else { return nil }
+        return turnEnds.last { $0.lastWordEnd == last.end }?.endOfSpeech ?? last.end
     }
 
     // MARK: Turns and utterances
@@ -199,8 +213,9 @@ final class SpeechPipeline: SpeechEngine {
         evaluate()
         // Second-pass revisions can run while paused.
         translation.idle(silence: isPaused ? .infinity : latest.silence)
-        if latest.silence >= settings.settings.overlay.paragraphBreak, captions.liveSource.isEmpty {
-            captions.requestParagraphBreak()
+        if latest.silence >= settings.settings.overlay.paragraphBreak {
+            captions.notePause(startingAt: latest.time - latest.silence)
+            if captions.liveSource.isEmpty { captions.requestParagraphBreak() }
         }
     }
 
@@ -259,7 +274,8 @@ final class SpeechPipeline: SpeechEngine {
         if utteranceEnd != nil, !sentence.isComplete {
             boundary = nil // the turn's words have all been handed over
         }
-        translation.update(sentence, speechEndedAgo: sentence.isComplete ? speechEndedAgo : nil)
+        translation.update(sentence, speechEndedAgo: sentence.isComplete ? speechEndedAgo : nil,
+                           speechEnd: sentence.isComplete ? speechEnd(of: sentence) : nil)
         let rest = pending.dropFirst(sentence.tokens.count).map(\.text).joined()
         captions.liveSource = rest.trimmingCharacters(in: .whitespacesAndNewlines)
     }

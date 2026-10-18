@@ -21,6 +21,9 @@ final class LiveTranslationController {
     private var inFlight: SimulRequest?
     /// Source tokens of each final request, handed back to the engine once the sentence is finished.
     private var finalTokens: [Int: [Token]] = [:]
+    /// Where the speech of `latest` ended (once complete), and of each final request's sentence.
+    private var latestSpeechEnd: Double?
+    private var finalSpeechEnds: [Int: Double] = [:]
     /// A finished sentence waiting for its second pass, which uses the recognizer's final transcript when it
     /// arrives (more accurate than the in-progress text the live pass translated).
     private struct RevisionJob {
@@ -145,10 +148,12 @@ final class LiveTranslationController {
     }
 
     /// The engine reports the sentence in progress (stable source only) on every tick. `speechEndedAgo`: for a
-    /// complete utterance, how long ago its speech ended (for latency metrics).
-    func update(_ sentence: SourceFrontier.Sentence, speechEndedAgo: Double? = nil) {
+    /// complete utterance, how long ago its speech ended (for latency metrics); `speechEnd`: where, on the audio
+    /// timeline.
+    func update(_ sentence: SourceFrontier.Sentence, speechEndedAgo: Double? = nil, speechEnd: Double? = nil) {
         guard !sentence.tokens.isEmpty else { return }
         latest = sentence
+        latestSpeechEnd = speechEnd
         captions.currentSentence(source: sentence.text)
         metrics.sourceSeen(at: now)
         if let ago = speechEndedAgo { metrics.speechEnded(at: now - ago) }
@@ -174,6 +179,7 @@ final class LiveTranslationController {
         latest = nil
         inFlight = nil
         finalTokens = [:]
+        finalSpeechEnds = [:]
         fragmentRequests = []
         continuesFragment = false
         revisionQueue = []
@@ -192,6 +198,8 @@ final class LiveTranslationController {
               let request = policy.update(source: sentence.text, isFinal: sentence.isComplete, now: now) else { return }
         if request.isFinal {
             finalTokens[request.id] = sentence.tokens
+            // Kept with the request: while it's translated, later words can make `latest` a longer sentence.
+            finalSpeechEnds[request.id] = latestSpeechEnd
             if sentence.isCut { fragmentRequests.insert(request.id) }
             metrics.completed(at: now)
         }
@@ -230,7 +238,7 @@ final class LiveTranslationController {
             let id = captions.sentence(forFinishing: finished.source)
             metrics.display(outcome.display, at: now)
             captions.finishCurrent(source: finished.source, translation: finished.translation,
-                                   replaced: outcome.replacedCommitted)
+                                   replaced: outcome.replacedCommitted, speechEnd: finalSpeechEnds.removeValue(forKey: request.id))
             metrics.finished(at: now, translation: finished.translation, replaced: outcome.replacedCommitted)
             DebugLog.write("SENTENCE " + metrics.summaryJSON(source: finished.source))
             metrics = SentenceMetrics()

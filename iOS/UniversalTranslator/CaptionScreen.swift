@@ -145,7 +145,7 @@ private struct MicButton: View {
         let captions = app.captions
         let active = !(captions.status == .idle || isError)
         Button {
-            app.controller.toggle()
+            app.toggleListening()
         } label: {
             ZStack {
                 if case .preparing = captions.status {
@@ -181,32 +181,59 @@ private struct MicButton: View {
     }
 }
 
-/// The caption block, placed at the top, middle or bottom of the screen.
+/// The caption block at the top, middle or bottom of the screen, and the notepad in the space it leaves.
 struct CaptionStage: View {
     let app: AppController
+    @AppStorage(Notepad.enabledKey) private var notepadEnabled = true
+    @AppStorage(Notepad.showSourceKey) private var notepadShowsSource = true
+    @AppStorage(Notepad.fontSizeKey) private var notepadFontSize = Notepad.defaultFontSize
 
     var body: some View {
         let s = app.settings.settings
         let o = s.overlay
+        let direction = CaptionBox.TextDirections(source: s.sourceLocale, target: s.targetLanguage)
+        let paragraphs = notepadEnabled && !app.captions.isDemo
+            ? NotepadParagraph.paragraphs(of: app.captions.sentences, pauses: app.captions.pauses,
+                                         transcriptionOnly: s.translation.backend == .none)
+            : []
+        let captionsOnTop = verticalAlignment(o.anchor) == .top
         GeometryReader { geo in
             // A ticker runs edge to edge; other layouts keep clear of the screen edges.
             let inset: CGFloat = o.layout == .marquee ? 0 : 20
             let width = max(100, geo.size.width - 2 * inset)
-            Group {
-                if app.captions.status == .idle, !app.captions.hasVisibleText {
+            let captionArea = Group {
+                if app.captions.status == .idle, !app.captions.hasVisibleText, paragraphs.isEmpty {
                     hint(s)
                 } else {
                     CaptionBox(o: o, captions: app.captions, privacy: PrivacyStatus.of(s), isUnlocked: false,
                                textWidth: width - (o.backgroundStyle == .box ? 2 * o.paddingH : 0),
-                               direction: .init(source: s.sourceLocale, target: s.targetLanguage))
+                               direction: direction)
                         .frame(maxWidth: o.backgroundStyle == .box && !o.fixedWidthBox ? nil : .infinity, alignment: o.alignment.frame)
                 }
             }
             .frame(width: width)
             .padding(.horizontal, inset)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: verticalAlignment(o.anchor))
             .opacity(o.opacity)
+
+            if paragraphs.isEmpty {
+                captionArea
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Alignment(horizontal: .center, vertical: verticalAlignment(o.anchor)))
+            } else {
+                // The notepad takes the rest of the screen, with its newest text next to the captions (which sit
+                // at the bottom unless they're set to the top).
+                let notepad = NotepadView(paragraphs: paragraphs, fontSize: notepadFontSize, showSource: notepadShowsSource,
+                                          direction: direction, alignment: captionsOnTop ? .top : .bottom)
+                    .frame(maxWidth: 920, maxHeight: .infinity)
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity)
+                VStack(spacing: 16) {
+                    if captionsOnTop { captionArea }
+                    notepad
+                    if !captionsOnTop { captionArea }
+                }
+                .padding(.vertical, 12)
+            }
         }
     }
 
@@ -227,7 +254,7 @@ struct CaptionStage: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func verticalAlignment(_ anchor: OverlayAnchor) -> Alignment {
+    private func verticalAlignment(_ anchor: OverlayAnchor) -> VerticalAlignment {
         switch anchor {
         case .topLeading, .top, .topTrailing: return .top
         case .bottomLeading, .bottom, .bottomTrailing: return .bottom

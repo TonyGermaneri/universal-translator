@@ -11,6 +11,9 @@ struct RecognizerResult {
     var isFinal: Bool
     var start: Double
     var end: Double
+    /// For a final result that closes a turn: where the speaker stopped (from `turnEnded(at:)`). Set by recognizers
+    /// that don't time their words, whose word times are only estimates.
+    var endOfSpeech: Double?
     var text: String { pieces.map(\.text).joined() }
 }
 
