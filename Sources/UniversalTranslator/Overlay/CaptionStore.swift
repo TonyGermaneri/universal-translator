@@ -102,6 +102,15 @@ final class CaptionStore {
         return max(0, reader.readingTime(text) - max(0, since))
     }
 
+    /// Whether the captions have been quiet long enough to clear (`after` seconds of silence, 0 = never). Text is
+    /// never cleared before it's had time to be read, or while marquee text is still crossing the screen.
+    func shouldAutoClear(after delay: Double, readingSpeed: Double) -> Bool {
+        guard delay > 0, hasVisibleText, !isSpeaking, liveSource.isEmpty, !isScrolling,
+              paragraph.last?.isFinished ?? true else { return false }
+        let idle = Date().timeIntervalSince(lastActivity)
+        return idle > max(delay, readingTimeOfLatest(charactersPerSecond: readingSpeed))
+    }
+
     /// Time-based effects on new and revised text last this long.
     static let fadeInDuration: TimeInterval = 0.35
     static let highlightDuration: TimeInterval = 1.4

@@ -3,9 +3,11 @@ import PackageDescription
 
 let package = Package(
     name: "UniversalTranslator",
-    platforms: [.macOS("26.4")],
+    platforms: [.macOS("26.4"), .iOS("26.4")],
     products: [
         .executable(name: "UniversalTranslator", targets: ["UniversalTranslator"]),
+        // Everything the iPhone and iPad app (iOS/UniversalTranslator.xcodeproj) links.
+        .library(name: "AppDependencies", targets: ["AppDependencies"]),
     ],
     dependencies: [
         // NVIDIA Nemotron streaming speech recognition (Core ML) and friends. Pinned; the NeMo text-normalization
@@ -46,6 +48,13 @@ let package = Package(
         // The macOS app: audio capture, speech engines, translation backends, overlay, settings UI.
         .executableTarget(
             name: "UniversalTranslator",
+            dependencies: ["TranslatorCore", "LocalLLM", "LocalMLX", .product(name: "FluidAudio", package: "FluidAudio")],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // The libraries the iOS app's Xcode project links, as one product: the project compiles the app's shared
+        // sources itself, and a project-level FluidAudio reference couldn't leave out its default traits.
+        .target(
+            name: "AppDependencies",
             dependencies: ["TranslatorCore", "LocalLLM", "LocalMLX", .product(name: "FluidAudio", package: "FluidAudio")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

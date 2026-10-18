@@ -1,4 +1,6 @@
-// Renders the app icon (.icns) from an SF Symbol. Usage: swift scripts/make-icon.swift <output.icns>
+// Renders the app icon from an SF Symbol.
+//   swift scripts/make-icon.swift <output.icns>   the Mac icon
+//   swift scripts/make-icon.swift <output.png>    the 1024 px iPhone/iPad icon (square and opaque: iOS rounds it)
 import AppKit
 
 let output = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.icns"
@@ -6,19 +8,20 @@ let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponen
 try? FileManager.default.removeItem(at: iconset)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 
-func render(_ px: Int) -> Data {
+func render(_ px: Int, fullBleed: Bool = false) -> Data {
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
-                               samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                               samplesPerPixel: fullBleed ? 3 : 4, hasAlpha: !fullBleed, isPlanar: false,
+                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 32)!
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     let s = CGFloat(px)
-    let inset = s * 0.1
+    let inset = fullBleed ? 0 : s * 0.1
     let rect = NSRect(x: inset, y: inset, width: s - 2 * inset, height: s - 2 * inset)
-    let path = NSBezierPath(roundedRect: rect, xRadius: rect.width * 0.225, yRadius: rect.width * 0.225)
+    let path = fullBleed ? NSBezierPath(rect: rect)
+        : NSBezierPath(roundedRect: rect, xRadius: rect.width * 0.225, yRadius: rect.width * 0.225)
     NSGradient(colors: [NSColor(red: 0.20, green: 0.42, blue: 1.0, alpha: 1),
                         NSColor(red: 0.47, green: 0.22, blue: 0.93, alpha: 1)])!.draw(in: path, angle: -60)
-    let config = NSImage.SymbolConfiguration(pointSize: s * 0.42, weight: .semibold)
+    let config = NSImage.SymbolConfiguration(pointSize: rect.width * 0.525, weight: .semibold)
         .applying(.init(paletteColors: [.white]))
     if let symbol = NSImage(systemSymbolName: "captions.bubble.fill", accessibilityDescription: nil)?
         .withSymbolConfiguration(config) {
@@ -27,6 +30,12 @@ func render(_ px: Int) -> Data {
     }
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
+}
+
+if output.hasSuffix(".png") {
+    try render(1024, fullBleed: true).write(to: URL(fileURLWithPath: output))
+    print("Wrote \(output)")
+    exit(0)
 }
 
 for base in [16, 32, 128, 256, 512] {

@@ -90,6 +90,13 @@ mic / system audio / one app ─▶ capture ─┬─▶ Endpointer: Silero VAD 
 - [x] **Turn ends are handled from events,** so a turn that ends and resumes within one tick isn't missed.
 - [x] **The privacy check no longer resolves the host name on the main thread** (it blocked).
 
+### iPhone and iPad
+- [x] iOS app sharing the Mac app's engine and caption view: full-screen captions, microphone input, flip for the person opposite, settings and transcript, `DictationTranscriber` fallback, model memory checks.
+- [ ] Captions over other apps, using Picture in Picture with rendered caption frames.
+- [ ] Captioning other apps' audio, using a ReplayKit broadcast extension (50 MB memory limit, so recognition only, with the audio or text forwarded to the app).
+- [ ] Model downloads that continue in the background (background `URLSession`).
+- [ ] Two-way conversation mode: each side speaks its own language, with automatic language switching.
+
 ### Still open
 - [ ] Private Cloud Compute second pass.
 - [ ] Better continuation of sentences cut at the 40-word cap, for example a hidden forced prefix of the previous translation.

@@ -1,6 +1,6 @@
-import AppKit
 import SwiftUI
 import TranslatorCore
+import UniformTypeIdentifiers
 
 /// The whole session as a scrollable transcript: every translated sentence with its original, the sentence in
 /// progress at the bottom, search, copy and export. Follows the latest sentence until you scroll up.
@@ -73,10 +73,12 @@ struct TranscriptView: View {
                 .padding(16)
             }
         }
+        #if os(macOS)
         .frame(minWidth: 420, minHeight: 300)
+        #endif
         .searchable(text: $query, placement: .toolbar, prompt: "Search transcript")
         .toolbar {
-            ToolbarItemGroup {
+            ToolbarItemGroup(placement: Self.toolbarPlacement) {
                 Toggle(isOn: $showOriginal) {
                     Label("Original", systemImage: "text.bubble")
                 }
@@ -95,19 +97,82 @@ struct TranscriptView: View {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
                 .help("Copy the whole transcript")
+                #if os(macOS)
                 Button {
                     app.exportTranscript()
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
                 .help("Export as subtitles (.srt, .vtt) or text")
+                #else
+                Menu {
+                    ForEach(TranscriptFile.Format.allCases, id: \.self) { format in
+                        ShareLink(item: TranscriptFile(entries: captions.sessionEntries, format: format),
+                                  preview: SharePreview(format.title)) {
+                            Text(format.title)
+                        }
+                    }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .disabled(captions.sessionEntries.isEmpty)
+                #endif
             }
         }
     }
 
+    #if os(macOS)
+    private static let toolbarPlacement = ToolbarItemPlacement.automatic
+    #else
+    private static let toolbarPlacement = ToolbarItemPlacement.bottomBar
+    #endif
+
     private func copyAll() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(SubtitleExporter.text(captions.sessionEntries), forType: .string)
+        Platform.copyToPasteboard(SubtitleExporter.text(captions.sessionEntries))
+    }
+}
+
+/// The session as a subtitle or text file, for the share sheet.
+struct TranscriptFile: Transferable {
+    enum Format: CaseIterable {
+        case srt, vtt, text
+
+        var title: String {
+            switch self {
+            case .srt: return "Subtitles (.srt)"
+            case .vtt: return "Web subtitles (.vtt)"
+            case .text: return "Text"
+            }
+        }
+
+        var fileExtension: String {
+            switch self {
+            case .srt: return "srt"
+            case .vtt: return "vtt"
+            case .text: return "txt"
+            }
+        }
+    }
+
+    let entries: [SessionEntry]
+    let format: Format
+
+    var text: String {
+        switch format {
+        case .srt: return SubtitleExporter.srt(entries, includeSource: true)
+        case .vtt: return SubtitleExporter.vtt(entries, includeSource: true)
+        case .text: return SubtitleExporter.text(entries)
+        }
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .plainText) { file in
+            let name = "Translation \(Date().formatted(date: .abbreviated, time: .shortened))"
+                .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).\(file.format.fileExtension)")
+            try file.text.write(to: url, atomically: true, encoding: .utf8)
+            return SentTransferredFile(url)
+        }
     }
 }
 

@@ -30,7 +30,7 @@ final class SettingsStore {
         observers.append(handler)
     }
 
-    func resetOverlay() { settings.overlay = OverlaySettings() }
+    func resetOverlay() { settings.overlay = AppSettings.defaults.overlay }
 
     func exportJSON() throws -> Data {
         let encoder = JSONEncoder()
@@ -59,14 +59,14 @@ final class SettingsStore {
     }
 
     private static func load(from defaults: UserDefaults) -> AppSettings {
-        guard let data = defaults.data(forKey: key) else { return AppSettings() }
-        return (try? decodeMergingDefaults(data)) ?? AppSettings()
+        guard let data = defaults.data(forKey: key) else { return .defaults }
+        return (try? decodeMergingDefaults(data)) ?? .defaults
     }
 
     /// Decodes stored settings on top of the current defaults, so settings saved by an older
     /// version (missing newer keys) still load instead of resetting everything.
     static func decodeMergingDefaults(_ data: Data) throws -> AppSettings {
-        let defaultsObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AppSettings()))
+        let defaultsObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AppSettings.defaults))
         let stored = try JSONSerialization.jsonObject(with: data)
         let merged = merge(defaultsObject, stored)
         return try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: merged))

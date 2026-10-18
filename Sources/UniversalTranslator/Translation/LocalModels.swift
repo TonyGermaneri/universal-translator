@@ -153,6 +153,11 @@ final class LocalModelStore {
         return base.appendingPathComponent("Universal Translator/Models", isDirectory: true)
     }
 
+    /// Whether a model can be loaded within the memory the system lets this app use (always on a Mac).
+    static func fitsInMemory(_ model: LocalModel) -> Bool {
+        Double(model.bytes) * 1.25 < Double(Platform.modelMemoryBudget)
+    }
+
     init() {
         for model in LocalModel.catalog { states[model.id] = isDownloaded(model) ? .ready : .notDownloaded }
     }
@@ -214,6 +219,13 @@ final class LocalModelStore {
             try? FileManager.default.removeItem(at: path(model))
             try FileManager.default.moveItem(at: staging.appendingPathComponent(model.localName), to: path(model))
             try? FileManager.default.removeItem(at: staging)
+            #if os(iOS)
+            // Models can be downloaded again; they don't belong in device backups.
+            var folder = Self.directory
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? folder.setResourceValues(values)
+            #endif
             states[model.id] = .ready
             log.info("Downloaded \(model.name, privacy: .public)")
         } catch {
@@ -278,6 +290,8 @@ final class LocalModelStore {
     func runner(_ model: LocalModel) async throws -> any CompletionRunner {
         if let runner = runners[model.id] { return runner }
         guard isDownloaded(model) else { throw LocalModelError.notDownloaded(model.name) }
+        // iOS ends an app that goes over its memory limit; refuse instead.
+        guard Self.fitsInMemory(model) else { throw LocalModelError.tooLarge(model.name) }
         let url = path(model)
         let started = Date()
         let runner: any CompletionRunner = try await Task.detached(priority: .userInitiated) {
@@ -296,6 +310,7 @@ enum LocalModelError: LocalizedError {
     case notDownloaded(String)
     case downloadFailed(String, String)
     case http(Int)
+    case tooLarge(String)
 
     var errorDescription: String? {
         switch self {
@@ -305,6 +320,8 @@ enum LocalModelError: LocalizedError {
             return "\(name) couldn't be downloaded: \(reason)"
         case .http(let code):
             return "The server returned HTTP \(code)."
+        case .tooLarge(let name):
+            return "\(name) needs more memory than this device lets an app use. Choose a smaller model."
         }
     }
 }

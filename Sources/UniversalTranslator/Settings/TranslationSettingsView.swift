@@ -76,7 +76,7 @@ struct TranslationSettingsView: View {
                 ForEach(LocalModel.translationModels(store.settings.translation.localEngine)) { model in
                     ModelRow(model: model, store: localModels)
                 }
-                Note("On-device translation models run on your Mac's GPU. They continue the translation already on screen instead of starting over each time, so live captions change far less. Nothing leaves your Mac.")
+                Note("On-device translation models run on your \(Platform.deviceName)'s GPU. They continue the translation already on screen instead of starting over each time, so live captions change far less. Nothing leaves your \(Platform.deviceName).")
                 Note(engineNote)
             } header: {
                 Text("On-device translation models")
@@ -208,7 +208,7 @@ struct TranslationSettingsView: View {
 
     private var backendNote: String {
         switch store.settings.translation.backend {
-        case .localLLM: return "Tencent's Hy-MT2 translation model running on your Mac. It continues the committed translation as you speak (the approach of the top systems in the IWSLT simultaneous translation evaluations), with earlier sentences as context, so captions are steady and consistent. Download it below."
+        case .localLLM: return "Tencent's Hy-MT2 translation model running on your \(Platform.deviceName). It continues the committed translation as you speak (the approach of the top systems in the IWSLT simultaneous translation evaluations), with earlier sentences as context, so captions are steady and consistent. Download it below."
         case .apple: return "Fastest and fully on-device. The sentence so far is re-translated as you speak, and only the words that consecutive translations agree on are committed, so word order differences (like Japanese verbs coming last) settle before they're shown as final."
         case .appleIntelligence: return "Apple's on-device language model, with earlier sentences as context. Noticeably slower than Apple Translation for live captions; better suited to the second pass."
         case .lmStudio: return "A model loaded in LM Studio, with earlier sentences as context. Speed depends on the model; small translation models (about 2B parameters) keep up best."
@@ -218,7 +218,7 @@ struct TranslationSettingsView: View {
 
     private var appleStatusText: String {
         switch appleStatus {
-        case .installed?: return "Ready (installed on this Mac)"
+        case .installed?: return "Ready (installed on this \(Platform.deviceName))"
         case .supported?: return "Supported. Language files need to be downloaded."
         case .unsupported?: return "Not supported by Apple Translation. Choose another translator."
         case nil: return "Checking…"
@@ -300,6 +300,10 @@ struct ModelRow: View {
                 if case .failed(let message) = store.state(model) {
                     Text("Download failed: \(message)").font(.caption).foregroundStyle(.red)
                 }
+                if tooLarge, store.state(model) != .ready {
+                    Text("Needs more memory than this \(Platform.deviceName) lets an app use.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
             Spacer()
             switch store.state(model) {
@@ -318,9 +322,12 @@ struct ModelRow: View {
                 Button("Download (\(ByteCountFormatter.string(fromByteCount: model.bytes, countStyle: .file)))") {
                     store.download(model)
                 }
+                .disabled(tooLarge)
             }
         }
     }
+
+    private var tooLarge: Bool { !LocalModelStore.fitsInMemory(model) }
 }
 
 /// Editable list of glossary terms.

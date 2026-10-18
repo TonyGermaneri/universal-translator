@@ -1,5 +1,7 @@
-import AppKit
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// A slider with its title, current value and optional explanation.
 struct SliderRow: View {
@@ -63,6 +65,7 @@ struct Note: View {
     }
 }
 
+#if os(macOS)
 /// Click, then press a key combination to record a global shortcut.
 struct HotkeyRecorder: View {
     let title: String
@@ -120,6 +123,7 @@ struct HotkeyRecorder: View {
         monitor = nil
     }
 }
+#endif
 
 /// 3×3 grid for choosing where the overlay sits on screen.
 struct AnchorPicker: View {

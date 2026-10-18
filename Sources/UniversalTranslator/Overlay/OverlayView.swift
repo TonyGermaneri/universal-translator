@@ -1,6 +1,10 @@
-import AppKit
 import SwiftUI
 import TranslatorCore
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Layout values the window controller shares with the SwiftUI content.
 @MainActor
@@ -103,7 +107,7 @@ struct CaptionBox: View {
         }
     }
 
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    private var reduceMotion: Bool { Platform.reduceMotion }
     /// A scrolling ticker would ignore Reduce Motion, so captions roll instead.
     private var isMarquee: Bool { o.layout == .marquee && !reduceMotion }
 
@@ -453,7 +457,7 @@ struct CaptionBox: View {
     }
 
     /// Natural single-line width of styled runs.
-    private func measure(_ runs: [Run], scale: Double, weight: NSFont.Weight? = nil) -> Double {
+    private func measure(_ runs: [Run], scale: Double, weight: PlatformFont.Weight? = nil) -> Double {
         let measured = NSMutableAttributedString()
         for run in runs {
             measured.append(NSAttributedString(string: run.text, attributes: [
@@ -583,22 +587,9 @@ struct CaptionBox: View {
         return .custom(o.fontFamily, size: size).weight(w)
     }
 
-    /// AppKit equivalent of `font(scale:weight:)`, for measuring line breaks.
-    private func nsFont(scale: Double, weight: NSFont.Weight? = nil, italic: Bool = false) -> NSFont {
-        let size = max(8, o.fontSize * scale)
-        let w = weight ?? o.fontWeight.nsWeight
-        var font: NSFont
-        if o.fontFamily.isEmpty {
-            font = .systemFont(ofSize: size, weight: w)
-        } else {
-            let descriptor = NSFontDescriptor(fontAttributes: [.family: o.fontFamily])
-                .addingAttributes([.traits: [NSFontDescriptor.TraitKey.weight: w]])
-            font = NSFont(descriptor: descriptor, size: size) ?? .systemFont(ofSize: size, weight: w)
-        }
-        if italic {
-            font = NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(.italic), size: size) ?? font
-        }
-        return font
+    /// AppKit/UIKit equivalent of `font(scale:weight:)`, for measuring line breaks.
+    private func nsFont(scale: Double, weight: PlatformFont.Weight? = nil, italic: Bool = false) -> PlatformFont {
+        .caption(family: o.fontFamily, size: max(8, o.fontSize * scale), weight: weight ?? o.fontWeight.nsWeight, italic: italic)
     }
 
     /// Renders text with optional outline (stroke) and shadow.
@@ -713,6 +704,7 @@ struct StatusDot: View {
     }
 }
 
+#if os(macOS)
 struct VisualEffectBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
@@ -724,6 +716,15 @@ struct VisualEffectBackground: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
+#else
+struct VisualEffectBackground: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    }
+
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
+}
+#endif
 
 /// Works out which part of a caption is visible when only the last N wrapped lines fit.
 enum CaptionFitter {
@@ -740,7 +741,7 @@ enum CaptionFitter {
         let storage = NSTextStorage(attributedString: text)
         let layoutManager = NSLayoutManager()
         // A couple of points of slack so SwiftUI never wraps where TextKit didn't.
-        let container = NSTextContainer(size: NSSize(width: width - 3, height: .greatestFiniteMagnitude))
+        let container = NSTextContainer(size: CGSize(width: width - 3, height: .greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)

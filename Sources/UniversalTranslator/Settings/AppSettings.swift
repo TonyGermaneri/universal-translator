@@ -1,6 +1,10 @@
-import AppKit
 import SwiftUI
 import TranslatorCore
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 // MARK: - Choices
 
@@ -98,8 +102,14 @@ struct RGBA: Codable, Equatable {
     }
 
     init(_ color: Color) {
+        #if os(macOS)
         let ns = NSColor(color).usingColorSpace(.sRGB) ?? .white
         self.init(ns.redComponent, ns.greenComponent, ns.blueComponent, ns.alphaComponent)
+        #else
+        var r: CGFloat = 1, g: CGFloat = 1, b: CGFloat = 1, a: CGFloat = 1
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        self.init(r, g, b, a)
+        #endif
     }
 
     var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
@@ -153,6 +163,7 @@ enum OverlayLevel: String, Codable, CaseIterable, Identifiable {
         case .aboveEverything: return "Above everything (incl. full-screen apps)"
         }
     }
+    #if os(macOS)
     var windowLevel: NSWindow.Level {
         switch self {
         case .floating: return .floating
@@ -160,6 +171,7 @@ enum OverlayLevel: String, Codable, CaseIterable, Identifiable {
         case .aboveEverything: return .screenSaver
         }
     }
+    #endif
 }
 
 enum BackgroundStyle: String, Codable, CaseIterable, Identifiable {
@@ -207,7 +219,7 @@ enum FontWeightChoice: String, Codable, CaseIterable, Identifiable {
         case .black: return .black
         }
     }
-    var nsWeight: NSFont.Weight {
+    var nsWeight: PlatformFont.Weight {
         switch self {
         case .light: return .light
         case .regular: return .regular
@@ -410,6 +422,27 @@ struct AppSettings: Codable, Equatable {
     var hasCompletedFirstRun = false
 }
 
+extension AppSettings {
+    /// A fresh install's settings. The iPhone and iPad app shows captions full screen rather than over other
+    /// apps, so it starts with several rolling lines of plain text instead of a ticker along the bottom.
+    static var defaults: AppSettings {
+        var s = AppSettings()
+        #if os(iOS)
+        s.overlay.layout = .rolling
+        s.overlay.maxLines = 5
+        s.overlay.sourceMaxLines = 2
+        s.overlay.backgroundStyle = .none
+        s.overlay.shadowEnabled = false
+        s.overlay.fontSize = 32
+        s.overlay.autoHide = false
+        s.overlay.autoClearAfter = 0
+        // The microphone button shows whether it's listening.
+        s.overlay.showStatusIndicator = false
+        #endif
+        return s
+    }
+}
+
 // MARK: - Overlay presets
 
 enum OverlayPreset: String, CaseIterable, Identifiable {
@@ -430,7 +463,7 @@ enum OverlayPreset: String, CaseIterable, Identifiable {
     /// Applies the preset's look while keeping the user's display and behavior choices.
     func apply(to o: inout OverlaySettings) {
         let keep = (o.screenMode, o.screenName, o.level, o.clickThrough, o.allSpaces, o.hideFromScreenCapture)
-        let base = OverlaySettings()
+        let base = AppSettings.defaults.overlay
         o = base
         (o.screenMode, o.screenName, o.level, o.clickThrough, o.allSpaces, o.hideFromScreenCapture) = keep
         switch self {

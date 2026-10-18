@@ -229,8 +229,7 @@ final class OverlayController: NSObject {
         let reading = captions.readingTimeOfLatest(charactersPerSecond: o.readingSpeed)
         // Marquee text that is still crossing the screen isn't cut off either.
         let scrolling = captions.isScrolling
-        if o.autoClearAfter > 0, captions.hasVisibleText, !captions.isSpeaking, captions.liveSource.isEmpty, !scrolling,
-           captions.paragraph.last?.isFinished ?? true, idle > max(o.autoClearAfter, reading) {
+        if captions.shouldAutoClear(after: o.autoClearAfter, readingSpeed: o.readingSpeed) {
             captions.clear()
         }
         let hasContent = captions.hasVisibleText || captions.status != .idle

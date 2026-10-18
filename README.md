@@ -11,6 +11,8 @@ It works like a simultaneous interpreter:
 
 Everything runs on your Mac. The design follows the IWSLT 2025/2026 winning systems; see [docs/RESEARCH.md](docs/RESEARCH.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
+There is also an [iPhone and iPad app](#iphone-and-ipad) with the same engine. It shows the captions full screen and listens to the microphone.
+
 ## Requirements
 
 - macOS 26.4 or later on Apple silicon (developed on macOS 27, M3 Max)
@@ -42,6 +44,29 @@ On first launch the Settings window opens:
 1. Under **General**, download the **NVIDIA Nemotron** speech model. Apple Speech is used until it's downloaded.
 2. Under **Translation**, download **Hy-MT2 1.8B** and, optionally, **Hy-MT2 7B**. Apple Translation is used until then.
 3. Click **Start Listening** or press **⌃⌥⌘T**.
+
+## iPhone and iPad
+
+The iOS app (iOS/iPadOS 26.4 or later) shares the Mac app's speech, translation and caption code: `iOS/UniversalTranslator.xcodeproj` compiles `Sources/UniversalTranslator` directly, except the Mac-only files listed in the project, and adds its own screens in `iOS/UniversalTranslator/`. iOS doesn't allow these Mac features, so the iOS app works differently:
+
+- **Full-screen captions instead of a floating overlay.** Tap the captions to hide the controls. **Flip** turns them upside down for the person across the table. Caption appearance and layout (rolling, stacked or marquee) use the same settings as the Mac overlay.
+- **Microphone only.** Apps can't record what other apps are playing. The input can be the built-in mic, a headset or a Bluetooth mic.
+- **Listening stops in the background** and restarts when you come back, because iOS doesn't let background apps use the GPU the translation models run on. The screen stays on while the app is listening.
+- **Model size is limited by memory.** iOS caps each app's memory, so Hy-MT2 7B (the optional second pass) only fits on devices with plenty of RAM. The app greys it out where it won't fit. Hy-MT2 1.8B, Nemotron, Apple Speech and Apple Translation work on the rest.
+- **Older devices use Apple's dictation model.** Devices without Apple's newer `SpeechTranscriber` get `DictationTranscriber` instead.
+
+To run it on your device:
+
+1. In Xcode → Settings → Accounts, add the Apple ID of your developer team. The project uses automatic signing with team `89NT2R3S2T`; change `DEVELOPMENT_TEAM` for another team.
+2. Turn on Developer Mode on the iPhone or iPad (Settings → Privacy & Security), and connect it by USB once to pair it.
+3. Either open `iOS/UniversalTranslator.xcodeproj` and press Run, or run:
+
+```sh
+scripts/build-ios.sh            # builds for the connected device (with none, checks that it compiles)
+scripts/build-ios.sh --run      # …installs it on the device and launches it
+```
+
+The scheme runs the Release configuration, because in a Debug build MLX's C++ is unoptimized and too slow for live captions.
 
 ## How it works
 
@@ -203,7 +228,7 @@ Sources/TranslatorCore/        platform-independent logic (unit tested)
   SentenceBoundary.swift, SubtitleExporter.swift
 Sources/LocalLLM/              CompletionRunner contract, and the llama.cpp runner: cache reuse, token healing, SSBD, valid UTF-8, stop strings
 Sources/LocalMLX/              the same on MLX (MLXRunner), and a byte-level BPE tokenizer matching Hugging Face's
-Sources/UniversalTranslator/   the app
+Sources/UniversalTranslator/   the Mac app (most of it also compiled into the iOS app)
   App/          AppController, TranslatorController (start/stop/pause/restart), menu bar
   Audio/        microphone and system-audio capture, Silero/Smart Turn endpointer, conversion (+ file playback)
   Engine/       SpeechPipeline, SpeechRecognizer (Apple), NemotronRecognizer
@@ -211,8 +236,12 @@ Sources/UniversalTranslator/   the app
   Overlay/      CaptionStore (sentences, effects, reading timing), OverlayController (window), OverlayView
   Transcript/   transcript window
   Settings/     settings model/persistence, privacy status, and the SwiftUI settings window
+  Support/      Platform (what differs between macOS and iOS), debug log, hotkeys
+Sources/AppDependencies/       the package product the iOS project links (re-exports the libraries above)
+iOS/UniversalTranslator/       the iPhone/iPad app: full-screen captions, controls, settings screens
+iOS/UniversalTranslator.xcodeproj
 Sources/llm-bench/             developer benchmark
 Tests/TranslatorCoreTests/
-scripts/                       build-app.sh, evaluate.py, make-icon.swift
+scripts/                       build-app.sh, build-ios.sh, evaluate.py, make-icon.swift
 docs/                          RESEARCH.md, ROADMAP.md
 ```

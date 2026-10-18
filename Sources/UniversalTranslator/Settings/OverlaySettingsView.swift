@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -105,7 +104,7 @@ struct AppearanceSettings: View {
             }
         }
         .task {
-            families = NSFontManager.shared.availableFontFamilies.filter { !$0.hasPrefix(".") }
+            families = Platform.fontFamilies
         }
     }
 }
@@ -124,6 +123,7 @@ struct LayoutSettings: View {
 
     var body: some View {
         Form {
+            #if os(macOS)
             Section {
                 HStack {
                     Button(store.settings.overlay.clickThrough ? "Unlock to drag & resize" : "Lock in place") {
@@ -135,7 +135,23 @@ struct LayoutSettings: View {
                 }
                 Note("When unlocked, drag the overlay anywhere and use the ↔ handle to change its width. Lock it again so clicks pass through to the apps underneath.")
             }
+            #else
+            Section {
+                Button("Preview") { app.showSampleCaptions() }
+                Button("Reset captions to defaults", role: .destructive) { store.resetOverlay() }
+            }
 
+            Section("Position") {
+                Picker("Captions sit at the", selection: $store.settings.overlay.anchor) {
+                    Text("Top").tag(OverlayAnchor.top)
+                    Text("Middle").tag(OverlayAnchor.center)
+                    Text("Bottom").tag(OverlayAnchor.bottom)
+                }
+                .pickerStyle(.segmented)
+            }
+            #endif
+
+            #if os(macOS)
             Section("Position") {
                 Picker("Display", selection: $store.settings.overlay.screenMode) {
                     ForEach(ScreenMode.allCases) { Text($0.title).tag($0) }
@@ -157,6 +173,7 @@ struct LayoutSettings: View {
                 SliderRow(title: "Horizontal margin", value: $store.settings.overlay.marginX, range: 0...400, step: 1, format: Fmt.points)
                 SliderRow(title: "Vertical margin", value: $store.settings.overlay.marginY, range: 0...400, step: 1, format: Fmt.points)
             }
+            #endif
 
             Section("Captions") {
                 Picker("Layout", selection: $store.settings.overlay.layout) {
@@ -176,7 +193,7 @@ struct LayoutSettings: View {
                 SliderRow(title: "Start a fresh caption after", value: $store.settings.overlay.paragraphBreak, range: 1...15,
                           format: Fmt.seconds, help: "After this much silence, the next words start a new caption instead of continuing the last one.")
                 Toggle("Show listening indicator", isOn: $store.settings.overlay.showStatusIndicator)
-                Toggle("Show privacy indicator (on this Mac / sends text elsewhere)", isOn: $store.settings.overlay.showPrivacyIndicator)
+                Toggle("Show privacy indicator (on this \(Platform.deviceName) / sends text elsewhere)", isOn: $store.settings.overlay.showPrivacyIndicator)
                     .disabled(!store.settings.overlay.showStatusIndicator)
             }
 
@@ -197,6 +214,7 @@ struct LayoutSettings: View {
                 }
             }
 
+            #if os(macOS)
             Section("Window") {
                 Picker("Stay on top of", selection: $store.settings.overlay.level) {
                     ForEach(OverlayLevel.allCases) { Text($0.title).tag($0) }
@@ -209,6 +227,7 @@ struct LayoutSettings: View {
                     SliderRow(title: "Hide after", value: $store.settings.overlay.autoHideDelay, range: 2...60, step: 1, format: Fmt.seconds)
                 }
             }
+            #endif
 
             Section("Animation") {
                 Picker("New lines (stacked layout)", selection: $store.settings.overlay.textAnimation) {

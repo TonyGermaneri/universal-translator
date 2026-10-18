@@ -1,7 +1,8 @@
 import AVFoundation
-import CoreAudio
 import os
 import TranslatorCore
+#if os(macOS)
+import CoreAudio
 
 struct AudioInputDevice: Identifiable, Hashable {
     var id: String { uid }
@@ -53,6 +54,20 @@ enum AudioDevices {
         return string as String
     }
 }
+#else
+/// A microphone the audio session can record from (built in, wired headset, Bluetooth, USB).
+struct AudioInputDevice: Identifiable, Hashable {
+    var id: String { uid }
+    let uid: String
+    let name: String
+}
+
+enum AudioDevices {
+    static func inputDevices() -> [AudioInputDevice] {
+        (AVAudioSession.sharedInstance().availableInputs ?? []).map { AudioInputDevice(uid: $0.uid, name: $0.portName) }
+    }
+}
+#endif
 
 /// Converts captured buffers to the format a consumer needs (e.g. 16 kHz mono for speech models).
 final class BufferConverter: @unchecked Sendable {
@@ -105,7 +120,11 @@ final class AudioCapture {
     var onConfigurationChange: (() -> Void)?
 
     private var fileSource: FileAudioSource?
+    #if os(macOS)
     private var systemAudio: SystemAudioCapture?
+    #else
+    private var interruptionObserver: NSObjectProtocol?
+    #endif
 
     func start(settings: AppSettings) throws {
         if let path = ProcessInfo.processInfo.environment["UT_AUDIO_FILE"], let onBuffer {
@@ -114,6 +133,7 @@ final class AudioCapture {
             fileSource?.start()
             return
         }
+        #if os(macOS)
         switch settings.audioSource {
         case .microphone:
             try startMicrophone(deviceUID: settings.inputDeviceUID)
@@ -124,15 +144,23 @@ final class AudioCapture {
             try capture.start(bundleID: app, appName: settings.sourceAppName, onBuffer: onBuffer)
             systemAudio = capture
         }
+        #else
+        try startMicrophone(deviceUID: settings.inputDeviceUID)
+        #endif
     }
 
     private func startMicrophone(deviceUID: String) throws {
+        #if os(iOS)
+        try activateSession(preferredInput: deviceUID)
+        #endif
         engine = AVAudioEngine()
         let input = engine.inputNode
+        #if os(macOS)
         if !deviceUID.isEmpty, var deviceID = AudioDevices.deviceID(forUID: deviceUID), let unit = input.audioUnit {
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
                                  &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
+        #endif
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw CaptureError.noInput }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -148,23 +176,64 @@ final class AudioCapture {
     func stop() {
         fileSource?.stop()
         fileSource = nil
+        #if os(macOS)
         systemAudio?.stop()
         systemAudio = nil
+        #endif
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = nil
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        #if os(iOS)
+        deactivateSession()
+        #endif
     }
+
+    #if os(iOS)
+    /// Records alongside whatever else is playing (a video, music), from the chosen microphone if it's connected.
+    private func activateSession(preferredInput uid: String) throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default,
+                                options: [.mixWithOthers, .allowBluetoothHFP, .defaultToSpeaker])
+        try session.setActive(true)
+        let input = uid.isEmpty ? nil : session.availableInputs?.first { $0.uid == uid }
+        try? session.setPreferredInput(input)
+        // A phone call or Siri stops the engine; start again once it's over.
+        if interruptionObserver == nil {
+            interruptionObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.interruptionNotification, object: session, queue: .main
+            ) { [weak self] note in
+                let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                    .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+                if type == .ended { self?.onConfigurationChange?() }
+            }
+        }
+    }
+
+    private func deactivateSession() {
+        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+        interruptionObserver = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+    #endif
 
     /// Microphone permission (other sources are covered by the system audio recording permission, which macOS
     /// asks for when capture starts).
     static func requestPermission(for source: AudioSource) async -> Bool {
-        if ProcessInfo.processInfo.environment["UT_AUDIO_FILE"] != nil || source != .microphone { return true }
+        if ProcessInfo.processInfo.environment["UT_AUDIO_FILE"] != nil || (Platform.isMac && source != .microphone) { return true }
+        #if os(macOS)
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return true
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
         default: return false
         }
+        #else
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted: return true
+        case .undetermined: return await AVAudioApplication.requestRecordPermission()
+        default: return false
+        }
+        #endif
     }
 }
 

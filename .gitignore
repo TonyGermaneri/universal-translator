@@ -2,6 +2,7 @@
 build/
 .swiftpm/
 *.xcodeproj/
+!iOS/UniversalTranslator.xcodeproj/
 xcuserdata/
 DerivedData/
 .DS_Store

@@ -45,10 +45,13 @@ enum EngineError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .speechUnavailable: return "On-device speech recognition isn't available on this Mac."
+        case .speechUnavailable: return "On-device speech recognition isn't available on this \(Platform.deviceName)."
         case .unsupportedLocale(let id): return "On-device speech recognition doesn't support \(id)."
         case .noAudioFormat: return "The speech model couldn't agree on an audio format."
-        case .microphoneDenied: return "Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone."
+        case .microphoneDenied:
+            return Platform.isMac
+                ? "Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone."
+                : "Microphone access is off. Enable it in Settings → Privacy & Security → Microphone."
         }
     }
 }
@@ -64,6 +67,8 @@ enum EngineError: LocalizedError {
 /// words ("When a request comes in" → "in."; `DictationTranscriber` does the same). Instead, when the speaker's
 /// turn ends, a second of silence is fed right away: the analyzer processes its pending audio immediately and
 /// finalizes the way it does at any natural pause. Result times are mapped back to the real audio timeline.
+///
+/// iPhones and iPads without `SpeechTranscriber` use `DictationTranscriber`, the model behind keyboard dictation.
 @MainActor
 final class AppleRecognizer: SpeechRecognizer {
     let name = "Apple Speech"
@@ -81,27 +86,58 @@ final class AppleRecognizer: SpeechRecognizer {
     /// Silence fed at the end of each turn.
     nonisolated static let flushSilence = 1.0
 
-    func prepare(locale identifier: String, contextualStrings: [String], status: @escaping (String) -> Void) async throws {
-        guard SpeechTranscriber.isAvailable else { throw EngineError.speechUnavailable }
-        status("Loading speech model…")
-        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: identifier)) else {
-            throw EngineError.unsupportedLocale(identifier)
-        }
-        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
-                                            reportingOptions: [.volatileResults, .fastResults],
-                                            attributeOptions: [.audioTimeRange])
-        resultsTask = Task { [weak self] in
-            do {
-                for try await r in transcriber.results { self?.handle(r.text, range: r.range, isFinal: r.isFinal) }
-            } catch {
-                self?.failed(error)
-            }
-        }
-        try await ensureAssets(for: transcriber, locale: locale, status: status)
+    /// Whether this device only has the dictation model.
+    static var usesDictation: Bool { !Platform.isMac && !SpeechTranscriber.isAvailable }
 
-        let analyzer = SpeechAnalyzer(modules: [transcriber],
+    static var supportedLocales: [Locale] {
+        get async { usesDictation ? await DictationTranscriber.supportedLocales : await SpeechTranscriber.supportedLocales }
+    }
+
+    static var installedLocales: [Locale] {
+        get async { usesDictation ? await DictationTranscriber.installedLocales : await SpeechTranscriber.installedLocales }
+    }
+
+    func prepare(locale identifier: String, contextualStrings: [String], status: @escaping (String) -> Void) async throws {
+        guard SpeechTranscriber.isAvailable || Self.usesDictation else { throw EngineError.speechUnavailable }
+        status("Loading speech model…")
+        let module: any SpeechModule
+        let locale: Locale
+        if Self.usesDictation {
+            guard let supported = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: identifier)) else {
+                throw EngineError.unsupportedLocale(identifier)
+            }
+            let transcriber = DictationTranscriber(locale: supported, contentHints: [], transcriptionOptions: [.punctuation],
+                                                   reportingOptions: [.volatileResults, .frequentFinalization],
+                                                   attributeOptions: [.audioTimeRange])
+            resultsTask = Task { [weak self] in
+                do {
+                    for try await r in transcriber.results { self?.handle(r.text, range: r.range, isFinal: r.isFinal) }
+                } catch {
+                    self?.failed(error)
+                }
+            }
+            (module, locale) = (transcriber, supported)
+        } else {
+            guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: identifier)) else {
+                throw EngineError.unsupportedLocale(identifier)
+            }
+            let transcriber = SpeechTranscriber(locale: supported, transcriptionOptions: [],
+                                                reportingOptions: [.volatileResults, .fastResults],
+                                                attributeOptions: [.audioTimeRange])
+            resultsTask = Task { [weak self] in
+                do {
+                    for try await r in transcriber.results { self?.handle(r.text, range: r.range, isFinal: r.isFinal) }
+                } catch {
+                    self?.failed(error)
+                }
+            }
+            (module, locale) = (transcriber, supported)
+        }
+        try await ensureAssets(for: module, locale: locale, status: status)
+
+        let analyzer = SpeechAnalyzer(modules: [module],
                                       options: .init(priority: .userInitiated, modelRetention: .processLifetime))
-        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
             throw EngineError.noAudioFormat
         }
         try await analyzer.prepareToAnalyze(in: format)
@@ -201,7 +237,7 @@ final class AppleRecognizer: SpeechRecognizer {
     private func finite(_ value: Double) -> Double? { value.isFinite ? value : nil }
 
     private func ensureAssets(for module: any SpeechModule, locale: Locale, status: @escaping (String) -> Void) async throws {
-        let installed = await SpeechTranscriber.installedLocales
+        let installed = await Self.installedLocales
         if !installed.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) {
             do {
                 try await AssetInventory.reserve(locale: locale)
