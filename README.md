@@ -68,6 +68,27 @@ scripts/build-ios.sh --run      # …installs it on the device and launches it
 
 The scheme runs the Release configuration, because in a Debug build MLX's C++ is unoptimized and too slow for live captions.
 
+## Releases
+
+Pushing a version tag publishes a signed and notarized Mac app on the [Releases](https://github.com/TonyGermaneri/universal-translator/releases) page:
+
+```sh
+git tag -a v0.2.0 -m "Universal Translator 0.2.0" && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` builds the tagged commit and signs it with the Developer ID certificate. Apple then notarizes it, the workflow staples the ticket, and the zip, its checksum and notes go into the release. The tag sets the app's version. A tag with a hyphen (`v0.2.0-rc1`) is published as a prerelease. To check the credentials without publishing, run the workflow from the Actions tab: the notarized zip is kept as the run's artifact.
+
+It uses these repository secrets:
+
+| Secret | Contents |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12` | Base64 of the *Developer ID Application* certificate exported from Keychain Access as a .p12 (`base64 -i cert.p12 \| gh secret set MACOS_CERTIFICATE_P12`) |
+| `MACOS_CERTIFICATE_PASSWORD` | The .p12's password |
+| `MACOS_SIGN_IDENTITY` | The identity's full name, e.g. `Developer ID Application: Name (TEAMID)` |
+| `NOTARY_KEY_P8`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` | An App Store Connect API key (the .p8 as text or base64), its key ID and its issuer ID |
+
+`scripts/package-macos.sh v0.2.0` makes the same zip locally in `dist/`. It signs with your Developer ID and notarizes when `NOTARY_KEY_PATH` (or `NOTARY_KEY_P8`), `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` are set. Every push to `main` also runs `.github/workflows/ci.yml`, which covers the tests, an ad-hoc signed Mac build (kept as an artifact for 14 days) and the iOS compile check.
+
 ## How it works
 
 ```
@@ -242,6 +263,7 @@ iOS/UniversalTranslator/       the iPhone/iPad app: full-screen captions, contro
 iOS/UniversalTranslator.xcodeproj
 Sources/llm-bench/             developer benchmark
 Tests/TranslatorCoreTests/
-scripts/                       build-app.sh, build-ios.sh, evaluate.py, make-icon.swift
+scripts/                       build-app.sh, build-ios.sh, package-macos.sh, release-notes.sh, evaluate.py, make-icon.swift
+.github/workflows/             ci.yml (every push), release.yml (version tags)
 docs/                          RESEARCH.md, ROADMAP.md
 ```

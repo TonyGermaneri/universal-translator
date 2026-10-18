@@ -1,0 +1,150 @@
+# Cutting a release:
+#
+#   git tag -a v0.2.0 -m "Universal Translator 0.2.0" && git push origin v0.2.0
+#
+# Builds the Mac app from the tagged commit, signs it with the Developer ID in MACOS_CERTIFICATE_P12, has Apple
+# notarize it, staples the ticket, and publishes the zip as a GitHub release. scripts/package-macos.sh does the
+# work, so the same zip can be made locally before tagging.
+#
+# Run it from the Actions tab (workflow_dispatch) to check the signing and notarization secrets without
+# publishing anything: the notarized zip is kept as the run's artifact.
+#
+# Secrets: MACOS_CERTIFICATE_P12 (base64 of the exported .p12), MACOS_CERTIFICATE_PASSWORD, MACOS_SIGN_IDENTITY
+# ("Developer ID Application: Name (TEAMID)"), and the App Store Connect API key NOTARY_KEY_P8, NOTARY_KEY_ID,
+# NOTARY_ISSUER_ID. Without the certificate (a fork) the release is ad-hoc signed, and its notes say so.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# Never cancelled: a half-finished notarization or publish is worse than a slow one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, sign and notarize
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/xcode
+      - uses: actions/cache@v4
+        with:
+          path: .build/xcode/SourcePackages
+          key: spm-${{ hashFiles('Package.resolved', 'iOS/**/Package.resolved') }}
+          restore-keys: spm-
+
+      # The certificate goes into a keychain made for this job and deleted after it, so nothing is left on the
+      # runner and the login keychain is never touched.
+      - name: Import the signing certificate
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then
+            echo "No certificate configured: this build will be ad-hoc signed."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12" 2>/dev/null || true
+          # A PKCS#12 file starts with an ASN.1 SEQUENCE (0x30). Pasting the file itself instead of its base64
+          # otherwise fails later, in security import, with a message that mentions neither.
+          if [ "$(head -c1 "$RUNNER_TEMP/cert.p12" | od -An -tx1 | tr -d ' ')" != "30" ]; then
+            echo "::error::MACOS_CERTIFICATE_P12 isn't base64 of a .p12. Set it with: base64 -i cert.p12 | gh secret set MACOS_CERTIFICATE_P12"
+            exit 1
+          fi
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Without this, codesign waits for a keychain-access prompt nobody can answer, until the job times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application'
+
+      - name: Build and package
+        env:
+          # Required when there's a certificate, so a broken credential stops the release instead of quietly
+          # producing a build the notes would describe wrongly; off when there isn't, so a fork can still build.
+          NOTARIZE: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && 'required' || 'off' }}
+          # Empty means "the one Developer ID identity in the keychain", the same as on a laptop.
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: scripts/package-macos.sh "$(git describe --tags --always)"
+
+      - name: Remove the keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Mac app"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| zip | $(cd dist && ls -- *.zip) |"
+            echo "| signing | $(cat dist/signing.txt) |"
+            echo "| sha256 | \`$(cut -d' ' -f1 dist/SHA256SUMS.txt)\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # signing.txt rides along so the notes can describe the build that was made.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-release
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+            dist/signing.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # All the tags, to find the previous release the changelog starts from.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-release
+          path: dist
+
+      - name: Write the notes
+        run: |
+          SIGNING="$(cat dist/signing.txt)" scripts/release-notes.sh "$GITHUB_REF_NAME" > NOTES.md
+          cat NOTES.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A hyphen is a prerelease (v0.2.0-rc1), which shouldn't become "Latest".
+          prerelease=()
+          [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" \
+            --title "Universal Translator ${GITHUB_REF_NAME#v}" \
+            --notes-file NOTES.md \
+            dist/*.zip dist/SHA256SUMS.txt

@@ -1,0 +1,37 @@
+name: Xcode
+description: >-
+  Selects the newest stable Xcode on the runner, checks that its SDKs are new enough, and (optionally) installs
+  the Metal toolchain that MLX's shaders are compiled with.
+
+inputs:
+  metal:
+    description: Install the Metal toolchain (needed by any xcodebuild build of the app)
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode
+      shell: bash
+      run: |
+        # The runner's default Xcode is often a version behind the newest one installed.
+        xcode="$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -viE 'beta|release_candidate|_rc' | sort -V | tail -1 || true)"
+        [ -n "$xcode" ] && sudo xcode-select -s "$xcode/Contents/Developer"
+        xcodebuild -version
+        # The app targets macOS and iOS 26.4, so it needs at least those SDKs.
+        for sdk in macosx iphoneos; do
+          v="$(xcrun --sdk "$sdk" --show-sdk-version)"
+          echo "$sdk SDK $v"
+          if [ "$(printf '%s\n26.4\n' "$v" | sort -V | head -1)" != "26.4" ]; then
+            echo "::error::$sdk SDK $v is older than 26.4; the runner image needs a newer Xcode"
+            exit 1
+          fi
+        done
+
+    # Since Xcode 26 the Metal compiler is a separate download, and without it MLX's shaders don't build.
+    - name: Metal toolchain
+      if: inputs.metal == 'true'
+      shell: bash
+      run: |
+        xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+        xcrun metal --version | head -1

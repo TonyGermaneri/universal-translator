@@ -1,0 +1,77 @@
+# Every push to main and every pull request: the tests, the Mac app, and the iPhone and iPad app.
+#
+# The Mac job builds through scripts/package-macos.sh, the same script a release uses, so packaging is exercised
+# on every push rather than for the first time under a tag. Its zip is an ad-hoc build of that commit; the
+# signing secrets are only handed to the release workflow.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes an in-progress run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/xcode
+        with:
+          metal: 'false'
+      - name: swift test
+        run: swift test
+
+  mac:
+    name: Mac app
+    runs-on: macos-26
+    steps:
+      # Unshallow, so git describe can name the build.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/xcode
+      # MLX, llama.cpp and FluidAudio, which take minutes to fetch.
+      - uses: actions/cache@v4
+        with:
+          path: .build/xcode/SourcePackages
+          key: spm-${{ hashFiles('Package.resolved', 'iOS/**/Package.resolved') }}
+          restore-keys: spm-
+
+      - name: Build and package
+        env:
+          SIGN_IDENTITY: '-'
+          NOTARIZE: 'off'
+        run: scripts/package-macos.sh "ci-${GITHUB_SHA:0:7}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ github.sha }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iPhone and iPad app
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/xcode
+      - uses: actions/cache@v4
+        with:
+          path: .build/xcode/SourcePackages
+          key: spm-${{ hashFiles('Package.resolved', 'iOS/**/Package.resolved') }}
+          restore-keys: spm-
+      # With no device attached, the script builds for a generic iOS device without signing: a compile check
+      # that the shared code still builds for iOS.
+      - name: Build
+        run: scripts/build-ios.sh
