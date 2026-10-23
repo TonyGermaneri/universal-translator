@@ -29,6 +29,21 @@ final class NemotronRecognizer: SpeechRecognizer {
     /// Silence after which the stream is reset.
     static let resetPause = 3.0
 
+    /// The speech locales the model has a language prompt for (the pinned revision's `prompt_dictionary` in
+    /// metadata.json, one locale per prompt). The "I speak" list where Apple's `SpeechTranscriber` list isn't
+    /// available (macOS 15). Left out: "or-KE" (Odia, Kenya: ambiguous) and "no-NO" (Bokmål and Nynorsk are listed);
+    /// "ar-SA" stands in for the model's "ar-AR" and resolves to the same prompt through FluidAudio's bare-language
+    /// fallback.
+    static let supportedLocales = [
+        "en-US", "en-GB", "es-ES", "es-US", "zh-CN", "zh-TW", "hi-IN", "ar-SA", "fr-FR", "fr-CA", "de-DE", "ja-JP",
+        "ru-RU", "pt-BR", "pt-PT", "ko-KR", "it-IT", "nl-NL", "pl-PL", "tr-TR", "uk-UA", "ro-RO", "el-GR", "cs-CZ",
+        "hu-HU", "sv-SE", "da-DK", "fi-FI", "nb-NO", "nn-NO", "sk-SK", "hr-HR", "bg-BG", "lt-LT", "et-EE", "lv-LV",
+        "sl-SI", "th-TH", "vi-VN", "id-ID", "ms-MY", "bn-IN", "ur-PK", "fa-IR", "ta-IN", "te-IN", "mr-IN", "gu-IN",
+        "kn-IN", "ml-IN", "si-LK", "ne-NP", "km-KH", "sw-KE", "am-ET", "ha-NG", "zu-ZA", "yo-NG", "ig-NG", "af-ZA",
+        "rw-RW", "so-SO", "ny-MW", "ln-CD", "he-IL", "ku-TR", "az-AZ", "ka-GE", "hy-AM", "uz-UZ", "tg-TJ", "ky-KG",
+        "qu-PE", "ay-BO", "gn-PY", "nah-MX", "mi-NZ", "haw-US", "sm-WS", "to-TO", "mt-MT",
+    ]
+
     private var feed: AsyncStream<Item>.Continuation?
     private var worker: Task<Void, Never>?
     private var resetWork: DispatchWorkItem?

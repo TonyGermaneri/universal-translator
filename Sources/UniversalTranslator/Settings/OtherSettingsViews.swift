@@ -57,7 +57,7 @@ struct AboutSettings: View {
                         }
                     }
                 }
-                LabeledContent("On-device speech recognition", value: SpeechTranscriber.isAvailable ? "Available" : "Unavailable")
+                LabeledContent("On-device speech recognition", value: speechText)
                 LabeledContent("Apple Intelligence model", value: fmText)
                 Note("Universal Translator doesn't need Accessibility or Input Monitoring access. It never reads or sends keystrokes.")
             }
@@ -88,7 +88,13 @@ struct AboutSettings: View {
         }
     }
 
+    private var speechText: String {
+        guard #available(macOS 26, *) else { return "Needs macOS 26 (Nemotron is used)" }
+        return SpeechTranscriber.isAvailable ? "Available" : "Unavailable"
+    }
+
     private var fmText: String {
+        guard #available(macOS 26, *) else { return "Needs macOS 26" }
         switch SystemLanguageModel.default.availability {
         case .available: return "Available"
         case .unavailable(let reason): return "Unavailable (\(reason))"

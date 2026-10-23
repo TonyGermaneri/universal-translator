@@ -36,6 +36,13 @@ enum Platform {
         #endif
     }()
 
+    /// Apple's on-device speech (SpeechAnalyzer), translation sessions and Apple Intelligence model, all macOS 26.
+    /// Without them (macOS 15) the app runs on its own models only: Nemotron and Hy-MT2 (or LM Studio).
+    static var hasAppleModels: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+
     @MainActor static var reduceMotion: Bool {
         #if os(macOS)
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion

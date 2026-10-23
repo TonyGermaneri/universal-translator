@@ -24,6 +24,16 @@ APP="$OUT_DIR/$APP_NAME.app"
 # xcodebuild rather than `swift build`: only xcodebuild compiles MLX's Metal shaders. (On a fresh Xcode, run
 # `sudo xcodebuild -runFirstLaunch` and `xcodebuild -downloadComponent MetalToolchain` once.)
 DERIVED=".build/xcode"
+# Swift < 6.3 (Xcode 26.3 and earlier, e.g. on macOS 15) needs the patched mlx-swift copy Package.swift points at.
+SWIFT_VERSION="$(xcrun swift -version 2>&1 | sed -nE 's/.*Apple Swift version ([0-9]+)\.([0-9]+).*/\1 \2/p')"
+read -r SWIFT_MAJOR SWIFT_MINOR <<< "$SWIFT_VERSION"
+if (( SWIFT_MAJOR < 6 || (SWIFT_MAJOR == 6 && SWIFT_MINOR < 3) )); then
+    scripts/vendor-mlx-swift.sh
+    # With the local override, resolution drops the mlx-swift pin from Package.resolved; put the checked-in file back.
+    RESOLVED_BACKUP="$(mktemp)"
+    cp Package.resolved "$RESOLVED_BACKUP"
+    trap 'cp "$RESOLVED_BACKUP" Package.resolved; rm -f "$RESOLVED_BACKUP"' EXIT
+fi
 xcodebuild build -scheme UniversalTranslator -configuration Release -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath "$DERIVED" -skipMacroValidation -skipPackagePluginValidation -quiet
 BIN_DIR="$DERIVED/Build/Products/Release"

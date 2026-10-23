@@ -30,12 +30,13 @@ struct TranslationSettingsView: View {
 
             Section {
                 Picker("Live translation", selection: $store.settings.translation.backend) {
-                    ForEach(TranslatorKind.allCases) { Text($0.title).tag($0) }
+                    ForEach(TranslatorKind.selectable) { Text($0.title).tag($0) }
                 }
                 Note(backendNote)
                 if store.settings.translation.backend == .localLLM, localModels.state(smallModel) != .ready {
                     HStack {
-                        Label("Apple Translation is used until \(smallModel.name) is downloaded.",
+                        Label(Platform.hasAppleModels ? "Apple Translation is used until \(smallModel.name) is downloaded."
+                                                      : "Download \(smallModel.name) to start listening.",
                               systemImage: "arrow.down.circle")
                             .foregroundStyle(.orange)
                         Spacer()
@@ -50,7 +51,7 @@ struct TranslationSettingsView: View {
 
             Section {
                 Picker("Second pass", selection: $store.settings.translation.revision) {
-                    ForEach(RevisionBackend.allCases) { Text($0.title).tag($0) }
+                    ForEach(RevisionBackend.selectable) { Text($0.title).tag($0) }
                 }
                 if store.settings.translation.revision == .localLLMLarge, localModels.state(largeModel) != .ready {
                     HStack {
@@ -82,36 +83,45 @@ struct TranslationSettingsView: View {
                 Text("On-device translation models")
             }
 
-            Section("Apple Translation · \(pairName)") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Standard model")
-                        Text(appleStatusText).font(.caption).foregroundStyle(.secondary)
+            // Apple Translation needs macOS 26 (before that, only through SwiftUI, not the sessions this app uses).
+            if Platform.hasAppleModels {
+                Section("Apple Translation · \(pairName)") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Standard model")
+                            Text(appleStatusText).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if appleStatus == .supported {
+                            Button("Download…") { requestDownload() }
+                        }
                     }
-                    Spacer()
-                    if appleStatus == .supported {
-                        Button("Download…") { requestDownload() }
+                    #if compiler(>=6.3)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Low-latency model")
+                            Text(fastStatusText).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if fastStatus == .supported {
+                            Button("Download…") { requestFastDownload() }
+                        }
                     }
+                    Note("Live captions use the low-latency model (about 30–150 ms per update) when it's downloaded, and the standard model otherwise. The high-fidelity second pass uses the standard model.")
+                    #else
+                    Note("Live captions use the standard model. This build (made with the macOS 26.2 SDK) can't use the low-latency model.")
+                    #endif
                 }
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Low-latency model")
-                        Text(fastStatusText).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if fastStatus == .supported {
-                        Button("Download…") { requestFastDownload() }
-                    }
+                .translationTask(downloadConfig) { session in
+                    try? await session.prepareTranslation()
+                    await refreshAppleStatus()
                 }
-                Note("Live captions use the low-latency model (about 30–150 ms per update) when it's downloaded, and the standard model otherwise. The high-fidelity second pass uses the standard model.")
-            }
-            .translationTask(downloadConfig) { session in
-                try? await session.prepareTranslation()
-                await refreshAppleStatus()
-            }
-            .translationTask(fastDownloadConfig) { session in
-                try? await session.prepareTranslation()
-                await refreshAppleStatus()
+                #if compiler(>=6.3)
+                .translationTask(fastDownloadConfig) { session in
+                    try? await session.prepareTranslation()
+                    await refreshAppleStatus()
+                }
+                #endif
             }
 
             Section {
@@ -236,6 +246,7 @@ struct TranslationSettingsView: View {
         }
     }
 
+    #if compiler(>=6.3)
     private func requestFastDownload() {
         if fastDownloadConfig == nil {
             fastDownloadConfig = TranslationSession.Configuration(source: source, target: target, preferredStrategy: .lowLatency)
@@ -243,6 +254,7 @@ struct TranslationSettingsView: View {
             fastDownloadConfig?.invalidate()
         }
     }
+    #endif
 
     private func requestDownload() {
         if downloadConfig == nil {
@@ -253,8 +265,11 @@ struct TranslationSettingsView: View {
     }
 
     private func refreshAppleStatus() async {
+        guard Platform.hasAppleModels else { return }
         appleStatus = await LanguageAvailability().status(from: source, to: target)
+        #if compiler(>=6.3)
         fastStatus = await LanguageAvailability(preferredStrategy: .lowLatency).status(from: source, to: target)
+        #endif
     }
 
     private func loadModels() async {

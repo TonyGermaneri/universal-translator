@@ -62,13 +62,9 @@ final class TranslatorController {
     private func startEngine() async {
         captions.status = .preparing("Preparing translation…")
         do {
+            try checkRequiredModels()
             try await translation.configure()
-            let recognizer: SpeechRecognizer = switch settings.settings.recognizer {
-            case .appleSpeech: AppleRecognizer()
-            case .nemotron:
-                LocalModelStore.shared.isDownloaded(.nemotron(for: settings.settings.sourceLocale))
-                    ? NemotronRecognizer() : AppleRecognizer()
-            }
+            let recognizer = makeRecognizer()
             DebugLog.write("RECOGNIZER \(recognizer.name)")
             let engine = SpeechPipeline(settings: settings, captions: captions, translation: translation,
                                         recognizer: recognizer)
@@ -83,6 +79,28 @@ final class TranslatorController {
             captions.status = .error(error.localizedDescription)
             captions.touch()
         }
+    }
+
+    /// Apple Speech, or Nemotron when it's chosen and downloaded.
+    private func makeRecognizer() -> SpeechRecognizer {
+        let nemotron = settings.settings.recognizer == .nemotron
+            && LocalModelStore.shared.isDownloaded(.nemotron(for: settings.settings.sourceLocale))
+        if #available(macOS 26, *), !nemotron { return AppleRecognizer() }
+        // Before macOS 26 Nemotron is the only recognizer; `checkRequiredModels()` made sure it's downloaded.
+        return NemotronRecognizer()
+    }
+
+    /// Before macOS 26 there's no Apple Speech or Translation to use while Nemotron or Hy-MT2 isn't downloaded, so
+    /// listening needs them first.
+    private func checkRequiredModels() throws {
+        guard !Platform.hasAppleModels else { return }
+        let s = settings.settings
+        var required: [LocalModel] = [.nemotron(for: s.sourceLocale)]
+        if s.translation.backend == .localLLM || s.translation.backend.needsAppleModels {
+            required.append(.live(s.translation.localEngine))
+        }
+        let missing = required.filter { !LocalModelStore.shared.isDownloaded($0) }
+        if !missing.isEmpty { throw EngineError.modelsRequired(missing.map(\.name)) }
     }
 
     private func stopEngine() async {

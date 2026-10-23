@@ -85,26 +85,35 @@ final class LiveTranslationController {
         let small = LocalModel.live(s.translation.localEngine)
         let large = LocalModel.reviser(s.translation.localEngine)
         var backend = s.translation.backend
+        var revision = s.translation.revision
+        if !Platform.hasAppleModels {
+            // Before macOS 26: no Apple Translation or Apple Intelligence (e.g. in settings imported from a newer
+            // Mac), and nothing to fall back on while a model downloads.
+            if backend.needsAppleModels { backend = .localLLM }
+            if revision.needsAppleModels { revision = .off }
+            if backend == .localLLM, !models.isDownloaded(small) { throw LocalModelError.notDownloaded(small.name) }
+        }
         if backend == .localLLM, !models.isDownloaded(small) {
             backend = .apple
             notice = "Using Apple Translation until \(small.name) is downloaded (Settings → Translation)."
         }
-        var revision = s.translation.revision
         if revision == .localLLMLarge, !models.isDownloaded(large) {
             // Apple's reviser disagrees with an LLM's wording too often to be worth the churn.
-            revision = backend == .localLLM ? .off : .appleHighFidelity
+            revision = backend == .localLLM || !Platform.hasAppleModels ? .off : .appleHighFidelity
         }
-        if revision == .localLLMSmall, !models.isDownloaded(small) { revision = .appleHighFidelity }
+        if revision == .localLLMSmall, !models.isDownloaded(small) {
+            revision = Platform.hasAppleModels ? .appleHighFidelity : .off
+        }
 
         let live: SentenceTranslator = switch backend {
         case .localLLM:
             LocalLLMTranslator(model: small, targetName: targetName, targetCode: s.targetLanguage,
                                glossary: s.translation.glossary, style: s.translation.customInstructions)
-        case .apple: AppleTranslator(source: source, target: target, lowLatency: true)
+        case .apple: try Self.appleTranslator(source: source, target: target, lowLatency: true)
         case .appleIntelligence:
-            FoundationModelTranslator(sourceName: sourceName, targetName: targetName,
-                                      customInstructions: s.translation.customInstructions, hint: profile.promptHint,
-                                      glossary: s.translation.glossary)
+            try Self.foundationModelTranslator(sourceName: sourceName, targetName: targetName,
+                                               customInstructions: s.translation.customInstructions,
+                                               hint: profile.promptHint, glossary: s.translation.glossary)
         case .lmStudio:
             LMStudioTranslator(settings: s.translation, sourceName: sourceName, targetName: targetName,
                                targetCode: s.targetLanguage, hint: profile.promptHint)
@@ -123,11 +132,11 @@ final class LiveTranslationController {
             case .localLLMSmall:
                 LocalLLMTranslator(model: small, targetName: targetName, targetCode: s.targetLanguage,
                                    glossary: s.translation.glossary, style: s.translation.customInstructions)
-            case .appleHighFidelity: AppleTranslator(source: source, target: target, lowLatency: false)
+            case .appleHighFidelity: try Self.appleTranslator(source: source, target: target, lowLatency: false)
             case .appleIntelligence:
-                FoundationModelTranslator(sourceName: sourceName, targetName: targetName,
-                                          customInstructions: s.translation.customInstructions, hint: "",
-                                          glossary: s.translation.glossary)
+                try Self.foundationModelTranslator(sourceName: sourceName, targetName: targetName,
+                                                   customInstructions: s.translation.customInstructions, hint: "",
+                                                   glossary: s.translation.glossary)
             case .lmStudio: LMStudioTranslator(settings: s.translation, sourceName: sourceName, targetName: targetName,
                                                targetCode: s.targetLanguage, hint: "")
             }
@@ -401,5 +410,20 @@ struct SentenceMetrics {
         ]
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data()
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+// Apple Translation and the Apple Intelligence model need macOS 26; `configure()` doesn't choose them before that.
+extension LiveTranslationController {
+    static func appleTranslator(source: Locale.Language, target: Locale.Language, lowLatency: Bool) throws -> SentenceTranslator {
+        guard #available(macOS 26, *) else { throw TranslatorError.needsMacOS26("Apple Translation") }
+        return AppleTranslator(source: source, target: target, lowLatency: lowLatency)
+    }
+
+    static func foundationModelTranslator(sourceName: String, targetName: String, customInstructions: String, hint: String,
+                                          glossary: [GlossaryEntry]) throws -> SentenceTranslator {
+        guard #available(macOS 26, *) else { throw TranslatorError.needsMacOS26("The Apple Intelligence model") }
+        return FoundationModelTranslator(sourceName: sourceName, targetName: targetName,
+                                         customInstructions: customInstructions, hint: hint, glossary: glossary)
     }
 }

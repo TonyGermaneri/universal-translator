@@ -26,6 +26,7 @@ enum TranslatorError: LocalizedError {
     case unsupportedPair(String, String)
     case modelUnavailable(String)
     case noModelSelected
+    case needsMacOS26(String)
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +38,8 @@ enum TranslatorError: LocalizedError {
             return "The Apple Intelligence model is unavailable: \(reason)"
         case .noModelSelected:
             return "Choose an LM Studio model in Settings → Translation."
+        case .needsMacOS26(let name):
+            return "\(name) needs macOS 26. Choose Hy-MT2 or LM Studio in Settings → Translation."
         }
     }
 }
@@ -62,8 +65,10 @@ enum LanguageNames {
 
 // MARK: - Apple Translation
 
+#if compiler(>=6.3)
 /// Apple's on-device Translation framework. `.lowLatency` (~30–150 ms) drives live captions;
 /// `.highFidelity` (~0.4–0.8 s) is better suited to the second pass.
+@available(macOS 26, *)
 @MainActor
 final class AppleTranslator: SentenceTranslator {
     let supportsPrefix = false
@@ -127,9 +132,62 @@ final class AppleTranslator: SentenceTranslator {
         self.session = TranslationSession(installedSource: source, target: target, preferredStrategy: strategy)
     }
 }
+#else
+/// Built with the macOS 26.2 SDK (Xcode 26.3, the newest Xcode that runs on macOS 15), which predates translation
+/// strategies: there's only the standard model, so `lowLatency` is ignored. Builds with the 26.4 SDK use the class
+/// above; keep the two in step.
+@available(macOS 26, *)
+@MainActor
+final class AppleTranslator: SentenceTranslator {
+    let supportsPrefix = false
+    private let source: Locale.Language
+    private let target: Locale.Language
+    private var session: TranslationSession?
+
+    init(source: Locale.Language, target: Locale.Language, lowLatency: Bool) {
+        self.source = source
+        self.target = target
+    }
+
+    static func status(source: Locale.Language, target: Locale.Language) async -> LanguageAvailability.Status {
+        await LanguageAvailability().status(from: source, to: target)
+    }
+
+    var qualityKey: String { "apple-hq-\(source.minimalIdentifier)-\(target.minimalIdentifier)" }
+
+    func prepare() async throws {
+        switch await Self.status(source: source, target: target) {
+        case .installed:
+            let session = TranslationSession(installedSource: source, target: target)
+            self.session = session
+            DebugLog.write("APPLE translator ready: \(qualityKey)")
+            _ = try? await session.translate("Hello.")
+        case .supported:
+            throw TranslatorError.languagesNotInstalled(LanguageNames.name(source.minimalIdentifier),
+                                                        LanguageNames.name(target.minimalIdentifier))
+        default:
+            throw TranslatorError.unsupportedPair(LanguageNames.name(source.minimalIdentifier),
+                                                  LanguageNames.name(target.minimalIdentifier))
+        }
+    }
+
+    func translate(source text: String, prefix: String, context: [TranslationContext], isFinal: Bool) async throws -> String {
+        if session == nil { try await prepare() }
+        guard let session else { return text }
+        return try await session.translate(text).targetText
+    }
+
+    func cancelInFlight() {
+        guard let session else { return }
+        session.cancel()
+        self.session = TranslationSession(installedSource: source, target: target)
+    }
+}
+#endif
 
 // MARK: - Apple Intelligence (Foundation Models)
 
+@available(macOS 26, *)
 @MainActor
 final class FoundationModelTranslator: SentenceTranslator {
     let supportsPrefix = false

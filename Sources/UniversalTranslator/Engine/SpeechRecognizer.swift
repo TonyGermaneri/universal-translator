@@ -45,6 +45,8 @@ enum EngineError: LocalizedError {
     case unsupportedLocale(String)
     case noAudioFormat
     case microphoneDenied
+    /// Before macOS 26 there's no Apple Speech or Translation to fall back on: these models must be downloaded first.
+    case modelsRequired([String])
 
     var errorDescription: String? {
         switch self {
@@ -55,6 +57,8 @@ enum EngineError: LocalizedError {
             return Platform.isMac
                 ? "Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone."
                 : "Microphone access is off. Enable it in Settings → Privacy & Security → Microphone."
+        case .modelsRequired(let names):
+            return "Download \(names.joined(separator: " and ")) in Settings → General to start listening. Apple's built-in speech recognition and translation need macOS 26."
         }
     }
 }
@@ -72,6 +76,7 @@ enum EngineError: LocalizedError {
 /// finalizes the way it does at any natural pause. Result times are mapped back to the real audio timeline.
 ///
 /// iPhones and iPads without `SpeechTranscriber` use `DictationTranscriber`, the model behind keyboard dictation.
+@available(macOS 26, *)
 @MainActor
 final class AppleRecognizer: SpeechRecognizer {
     let name = "Apple Speech"
