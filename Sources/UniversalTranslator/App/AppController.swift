@@ -23,7 +23,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         registerHotkeys()
         settings.observe { [weak self] old, new in
             if old.hotkeys != new.hotkeys { self?.registerHotkeys() }
+            if old.showInDock != new.showInDock { self?.updateDockIcon() }
         }
+        updateDockIcon()
 
         // Debug hooks for screenshots: open a window at launch.
         switch ProcessInfo.processInfo.environment["UT_OPEN"] {
@@ -86,7 +88,9 @@ final class AppController: NSObject, NSApplicationDelegate {
             window.center()
             window.setFrameAutosaveName("SettingsWindow")
             settingsWindow = window
+            observeClose(of: window)
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -102,9 +106,26 @@ final class AppController: NSObject, NSApplicationDelegate {
             window.center()
             window.setFrameAutosaveName("TranscriptWindow")
             transcriptWindow = window
+            observeClose(of: window)
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         transcriptWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// A menu bar app, with a Dock icon (and a place in ⌘-Tab) while one of its windows is open, minimized
+    /// included, so it's easy to get back to; or all the time if `showInDock` is on.
+    private func updateDockIcon() {
+        let windowOpen = [settingsWindow, transcriptWindow].contains { $0?.isVisible == true || $0?.isMiniaturized == true }
+        let policy: NSApplication.ActivationPolicy = settings.settings.showInDock || windowOpen ? .regular : .accessory
+        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
+    }
+
+    private func observeClose(of window: NSWindow) {
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            // Still visible while closing; check once it's gone.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.updateDockIcon() } }
+        }
     }
 
     func exportTranscript() {

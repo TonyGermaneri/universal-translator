@@ -225,6 +225,7 @@ struct GeneralSettings: View {
 
             Section("Startup") {
                 Toggle("Start listening when the app launches", isOn: $store.settings.startListeningAtLaunch)
+                Toggle("Always show in the Dock", isOn: $store.settings.showInDock)
                 Toggle("Open at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
                         do {
@@ -233,6 +234,7 @@ struct GeneralSettings: View {
                             launchAtLogin = SMAppService.mainApp.status == .enabled
                         }
                     }
+                Note("Otherwise the Dock icon shows only while a Universal Translator window is open. The menu bar icon is always there, but on a Mac with a notch, macOS hides menu bar icons that don't fit; open the app again from Spotlight or Finder to bring back Settings.")
             }
         }
         .task {
