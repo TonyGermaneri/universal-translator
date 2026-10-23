@@ -5,7 +5,7 @@ import Testing
 
 // The Mac app's choices that differ between macOS 26 (Apple's speech, translation and language models) and earlier
 // systems (Nemotron and Hy-MT2 only). Each takes `hasAppleModels`, so both answers are checked on any Mac: the
-// macOS 26 rows pin upstream's behavior, the others pin the macOS 15 port.
+// macOS 26 rows pin the behavior with Apple's engines, the others the macOS 15 behavior.
 
 @Suite struct EngineChoiceTests {
     private let small = LocalModel.hyMT2Small

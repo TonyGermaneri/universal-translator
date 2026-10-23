@@ -23,7 +23,7 @@ skip() { echo "  skip  $1"; }
 
 echo "tier2: $(sw_vers -productName) $(sw_vers -productVersion), $(xcrun swift -version 2>&1 | head -1 | sed -E 's/.*(Apple Swift version [0-9.]+).*/\1/')"
 
-# --- source floors: macOS 15 for the Mac app, iOS left at upstream's 26.4
+# --- source floors: macOS 15 for the Mac app, iOS 26.4
 grep -q 'platforms: \[.macOS(.v15), .iOS("26.4")\]' Package.swift \
     && pass "Package.swift floors: macOS 15, iOS 26.4" || fail "Package.swift floors aren't .macOS(.v15), .iOS(\"26.4\")"
 v="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist 2>/dev/null)"
@@ -38,7 +38,7 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
         || fail "Package.resolved differs from the commit (originHash or pins rewritten): git checkout Package.resolved"
 fi
 
-# --- toolchain: below Swift 6.3, the patched mlx-swift copy stands in for upstream's (scripts/vendor-mlx-swift.sh)
+# --- toolchain: below Swift 6.3, the patched mlx-swift copy stands in for the published one (scripts/vendor-mlx-swift.sh)
 read -r major minor <<< "$(xcrun swift -version 2>&1 | sed -nE 's/.*Apple Swift version ([0-9]+)\.([0-9]+).*/\1 \2/p')"
 if (( major < 6 || (major == 6 && minor < 3) )); then
     vendor=.build/vendor/mlx-swift
