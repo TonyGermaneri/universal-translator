@@ -151,9 +151,7 @@ final class OverlayController: NSObject {
         case .bottomTrailing: origin = NSPoint(x: right, y: bottom)
         case .custom:
             // Keep the bottom edge fixed so the caption grows upward as lines are added.
-            let cx = visible.minX + visible.width * o.customX
-            let by = visible.minY + visible.height * o.customY
-            origin = NSPoint(x: cx - size.width / 2, y: by)
+            origin = Self.customOrigin(x: o.customX, y: o.customY, size: size, in: visible)
         }
         origin.x = min(max(origin.x, visible.minX), visible.maxX - size.width)
         origin.y = min(max(origin.y, visible.minY), visible.maxY - size.height)
@@ -198,18 +196,35 @@ final class OverlayController: NSObject {
         }
     }
 
+    /// Remembers where the overlay was dropped, measured on the display it was dropped on (which may not be the one
+    /// it started on), and switches to that display if the display setting would put it elsewhere.
     private func saveCustomPosition() {
-        let visible = targetScreen().visibleFrame
-        let frame = panel.frame
+        let screen = panel.screen ?? targetScreen()
         var o = settings.settings.overlay
+        let position = Self.customPosition(of: panel.frame, in: screen.visibleFrame)
         o.anchor = .custom
-        o.customX = Double((frame.midX - visible.minX) / visible.width)
-        o.customY = Double((frame.minY - visible.minY) / visible.height)
-        if o.screenMode == .main, let screen = panel.screen, screen != NSScreen.screens.first {
-            o.screenMode = .specific
-            o.screenName = screen.localizedName
-        }
+        (o.customX, o.customY) = (position.x, position.y)
+        (o.screenMode, o.screenName) = Self.screenSetting(afterDropOn: screen.localizedName,
+                                                          target: targetScreen().localizedName,
+                                                          mode: o.screenMode, name: o.screenName)
         settings.settings.overlay = o
+    }
+
+    /// A frame's place on a display as `customX`/`customY`: its bottom center, as fractions of the visible area.
+    nonisolated static func customPosition(of frame: NSRect, in visible: NSRect) -> (x: Double, y: Double) {
+        (Double((frame.midX - visible.minX) / visible.width), Double((frame.minY - visible.minY) / visible.height))
+    }
+
+    /// The inverse: the origin of a frame of `size` placed at `x`, `y` (before clamping to the display).
+    nonisolated static func customOrigin(x: Double, y: Double, size: NSSize, in visible: NSRect) -> NSPoint {
+        NSPoint(x: visible.minX + visible.width * x - size.width / 2, y: visible.minY + visible.height * y)
+    }
+
+    /// The display setting after a drop: unchanged if it already picks the display the overlay landed on, otherwise
+    /// that display by name (so "main display" or "display with the mouse" doesn't pull it back).
+    nonisolated static func screenSetting(afterDropOn dropped: String, target: String, mode: ScreenMode,
+                                          name: String) -> (mode: ScreenMode, name: String) {
+        dropped == target ? (mode, name) : (.specific, dropped)
     }
 
     // MARK: Visibility

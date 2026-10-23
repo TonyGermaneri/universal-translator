@@ -133,7 +133,7 @@ struct LayoutSettings: View {
                     Spacer()
                     Button("Reset overlay", role: .destructive) { store.resetOverlay() }
                 }
-                Note("When unlocked, drag the overlay anywhere and use the ↔ handle to change its width. Lock it again so clicks pass through to the apps underneath.")
+                Note("When unlocked, drag the overlay anywhere, onto another display too, and use the ↔ handle to change its width (a full-width ticker moves only up and down until it's narrower). Lock it again so clicks pass through to the apps underneath. The Dock icon's menu has Move Captions and Lock Captions in Place too, as does \(store.settings.hotkeys.toggleLock.display).")
             }
             #else
             Section {

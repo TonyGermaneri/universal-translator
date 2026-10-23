@@ -126,6 +126,49 @@ final class AppController: NSObject, NSApplicationDelegate {
         menuBarOnly && !windowOpen ? .accessory : .regular
     }
 
+    // MARK: Dock menu
+
+    /// What the Dock icon's menu offers, so the essentials don't depend on finding the menu bar icon. (Clicking the
+    /// icon opens Settings; macOS adds Quit.)
+    enum DockAction: Equatable {
+        case startListening, stopListening, moveCaptions, lockCaptions, showCaptions, hideCaptions, showTranscript
+
+        var title: String {
+            switch self {
+            case .startListening: return "Start Listening"
+            case .stopListening: return "Stop Listening"
+            case .moveCaptions: return "Move Captions…"
+            case .lockCaptions: return "Lock Captions in Place"
+            case .showCaptions: return "Show Captions"
+            case .hideCaptions: return "Hide Captions"
+            case .showTranscript: return "Show Transcript"
+            }
+        }
+    }
+
+    nonisolated static func dockActions(listening: Bool, locked: Bool, shown: Bool) -> [DockAction] {
+        [listening ? .stopListening : .startListening, locked ? .moveCaptions : .lockCaptions,
+         shown ? .hideCaptions : .showCaptions, .showTranscript]
+    }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        for action in Self.dockActions(listening: controller.isListening, locked: overlay.isLocked, shown: overlay.isShownByUser) {
+            menu.addItem(ClosureMenuItem(action.title) { [weak self] in self?.perform(action) })
+        }
+        return menu
+    }
+
+    private func perform(_ action: DockAction) {
+        switch action {
+        case .startListening, .stopListening: controller.toggle()
+        // Unlocking shows the overlay, outlined, even with no captions, ready to drag.
+        case .moveCaptions, .lockCaptions: overlay.toggleLock()
+        case .showCaptions, .hideCaptions: overlay.toggleShown()
+        case .showTranscript: openTranscript()
+        }
+    }
+
     private func observeClose(of window: NSWindow) {
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
             // Still visible while closing; check once it's gone.
@@ -163,4 +206,19 @@ final class AppController: NSObject, NSApplicationDelegate {
             NSAlert(error: error).runModal()
         }
     }
+}
+
+/// A menu item that runs a closure (the Dock menu's items).
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("not used from a nib") }
+
+    @objc private func run() { handler() }
 }

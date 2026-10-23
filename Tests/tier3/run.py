@@ -5,6 +5,7 @@ checks behind the macOS 15 port and the Dock icon.
 
   first_run_gate   macOS 15, no models: listening refuses and names the downloads (no Apple fallback)
   dock             in the Dock by default; with "menu bar only", only while Settings or the transcript is open
+  overlay_display  a position saved on a display (as a drag saves it) puts the captions there, on each display
   engine_llamacpp  Nemotron + Silero VAD + Smart Turn + Hy-MT2 1.8B (llama.cpp), scripts/evaluate.py's passages
   engine_mlx       the same with Hy-MT2 1.8B on MLX
   system_audio     a tapped process (UT_TAP_PID), launched with `open` so the app asks for its own permission
@@ -162,6 +163,41 @@ def test_dock(work, args):
     return "in the Dock by default; menu bar only hides it until a window opens"
 
 
+def geometry(pid=None):
+    out = subprocess.run(["swift", os.path.join(ROOT, "Tests", "tier3", "geometry.swift")] + ([str(pid)] if pid else []),
+                         capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
+
+
+def test_overlay_display(work, args):
+    """A position saved on a display (as a drop saves it) puts the overlay on that display: each attached one."""
+    screens = geometry()["screens"]
+    placed = []
+    for screen in screens[:2]:
+        # Unlocked, so the overlay shows (outlined) without captions.
+        settings(overlay={"anchor": "custom", "customX": 0.5, "customY": 0.5, "screenMode": "specific",
+                          "screenName": screen["name"], "clickThrough": False})
+        launch({})
+        time.sleep(3)
+        pid = subprocess.run(["pgrep", "-nx", "UniversalTranslator"], capture_output=True, text=True).stdout.strip()
+        windows = geometry(pid)["windows"]
+        quit_app()
+        # The overlay panel, at whatever level the settings give it; the menu bar icon's windows are layer 25.
+        panel = [w for w in windows if w["onscreen"] and w["layer"] != 25 and w["w"] > 100]
+        assert panel, f"no overlay on screen for {screen['name']}: {windows}"
+        w = max(panel, key=lambda w: w["w"])
+        cx = w["x"] + w["w"] / 2
+        slack = 24  # the unlocked overlay's dashed outline reaches past the caption area
+        assert screen["x"] - slack <= w["x"] and w["x"] + w["w"] <= screen["x"] + screen["w"] + slack \
+            and screen["y"] - slack <= w["y"] and w["y"] + w["h"] <= screen["y"] + screen["h"] + slack, \
+            f"overlay {w} isn't on {screen['name']} {screen}"
+        assert abs(cx - (screen["x"] + screen["w"] / 2)) <= 0.05 * screen["w"], \
+            f"overlay isn't centered on {screen['name']}: center {cx:.0f}, display {screen}"
+        placed.append(f"{screen['name']} (at {w['x']:.0f},{w['y']:.0f})")
+    detail = "placed on " + " and ".join(placed)
+    return detail + ("" if len(screens) > 1 else " (only one display attached: the second-display case didn't run)")
+
+
 def engine(engine_name, work, args):
     require_models(*NEEDED.items(), LIVE[engine_name])
     logs = os.path.join(work, engine_name)
@@ -251,7 +287,8 @@ def test_mic(work, args):
     return f"{len(heard)} sentences from the microphone, WER {rate:.0%}"
 
 
-TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("engine_llamacpp", test_engine_llamacpp),
+TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
+         ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
 
 

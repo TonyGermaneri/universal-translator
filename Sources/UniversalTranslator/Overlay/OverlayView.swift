@@ -67,7 +67,7 @@ struct OverlayRootView: View {
                 .help("Drag to change the overlay width")
         }
         .overlay(alignment: .top) {
-            Text("Drag to position · lock with the menu bar icon")
+            Text("Drag anywhere, onto another display too · ↔ width · lock: Dock menu or \(settings.settings.hotkeys.toggleLock.display)")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8).padding(.vertical, 3)
