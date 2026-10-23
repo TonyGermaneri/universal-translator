@@ -308,6 +308,7 @@ struct ModelRow: View {
     let model: LocalModel
     let store: LocalModelStore
     @State private var showManual = false
+    @State private var scriptError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -373,26 +374,40 @@ struct ModelRow: View {
     #if os(macOS)
     private var manualSteps: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("If the download fails (for example behind a network proxy), run this in Terminal, then choose the \(model.isSingleFile ? "file" : "folder") it makes. Every file's checksum is checked before it's used.")
+            Text(model.isSingleFile
+                 ? "If the download fails (for example behind a network proxy), run this in Terminal, then choose the file it makes. Every file's checksum is checked before it's used."
+                 : "If the download fails (for example behind a network proxy): Copy command saves a download script to your Downloads folder and copies the one line that runs it. Paste that into Terminal, then choose the folder it makes. Anything after the script name goes to every curl (for example --cacert for a proxy's certificate). Every file's checksum is checked before it's used.")
                 .foregroundStyle(.secondary)
-            ScrollView {
-                Text(model.downloadCommands())
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
-            }
-            .frame(maxHeight: model.isSingleFile ? 44 : 120)
-            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+            Text(model.downloadCommands())
+                .font(.system(.caption2, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
             HStack {
-                Button("Copy commands") { Platform.copyToPasteboard(model.downloadCommands()) }
+                Button("Copy command") { copyCommand() }
                 Button(model.isSingleFile ? "Choose \(model.localName)…" : "Choose the \(model.localName) folder…") { choose() }
             }
-            if let error = store.importErrors[model.id] {
+            if let error = scriptError ?? store.importErrors[model.id] {
                 Text(error).foregroundStyle(.red)
             }
         }
         .padding(.top, 4)
+    }
+
+    /// Copies the command; for a folder model, first saves the script it runs into Downloads.
+    private func copyCommand() {
+        scriptError = nil
+        if !model.isSingleFile {
+            do {
+                guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
+                _ = try model.saveDownloadScript(in: downloads)
+            } catch {
+                scriptError = "Couldn't save the download script: \(error.localizedDescription)"
+                return
+            }
+        }
+        Platform.copyToPasteboard(model.downloadCommands())
     }
 
     private func choose() {

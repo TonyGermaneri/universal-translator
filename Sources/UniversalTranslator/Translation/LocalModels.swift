@@ -38,16 +38,40 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     /// The pinned SHA-256 of each file (ModelHashes.swift, from scripts/pin-model-hashes.py).
     var sha256: [String: String] { Self.pinnedSHA256[id] ?? [:] }
 
-    /// Terminal commands that download the model by hand into `folder`, for when the app's own download can't get
-    /// through: the one file, or the folder the app expects, file by file. Choose the result in Settings.
+    /// The Terminal command that downloads the model by hand into `folder`, for when the app's own download can't
+    /// get through: one curl for a single file; for a folder, one short line running `downloadScript` (saved as
+    /// `downloadScriptName` in `folder`), since pasting dozens of long lines into Terminal can garble them. Choose
+    /// the result in Settings.
     func downloadCommands(into folder: String = "~/Downloads") -> String {
         if isSingleFile {
             return "curl -L --fail -o \(folder)/\(localName) \"\(url(for: files[0]).absoluteString)\""
         }
+        return "bash \(folder)/\(downloadScriptName)"
+    }
+
+    var downloadScriptName: String { "get-\(localName).sh" }
+
+    /// A folder model's download script: the folder the app expects, file by file. Arguments to the script are
+    /// passed to every curl (for example a proxy's certificate: `--cacert FILE`).
+    func downloadScript(into folder: String) -> String {
         let directory = "\(folder)/\(localName)"
-        return (["mkdir -p \(directory) && cd \(directory)"]
-            + files.map { "curl -L --fail --create-dirs -o \($0) \"\(url(for: $0).absoluteString)\"" })
-            .joined(separator: "\n")
+        var lines = ["#!/bin/bash",
+                     "# Downloads \(name) for Universal Translator into \(directory).",
+                     "# Then choose that folder in Settings, which checks every file's checksum.",
+                     "# Arguments are passed to every curl, e.g.: bash \(downloadScriptName) --cacert proxy-root.pem",
+                     "set -euo pipefail",
+                     "mkdir -p \"\(directory)\"",
+                     "cd \"\(directory)\""]
+        lines += files.map { "curl -L --fail --create-dirs \"$@\" -o \($0) \"\(url(for: $0).absoluteString)\"" }
+        lines.append("echo \"Done. Now choose \(directory) in Universal Translator's Settings.\"")
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Saves `downloadScript` into `directory` (the user's Downloads folder) and returns where.
+    func saveDownloadScript(in directory: URL) throws -> URL {
+        let url = directory.appendingPathComponent(downloadScriptName)
+        try downloadScript(into: directory.path).write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     /// Fast live translator: Tencent Hy-MT2 1.8B (Apache-2.0), 4-bit.

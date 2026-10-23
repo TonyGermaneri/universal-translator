@@ -24,15 +24,54 @@ import Testing
                 + "\"https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/\(model.revision)/Hy-MT2-1.8B-Q4_K_M.gguf\"")
     }
 
-    @Test func folderCommandsRecreateTheFolderTheAppExpects() {
+    @Test func folderModelsGetOneShortLineToPaste() {
+        // Dozens of long curl lines pasted into Terminal at once came out garbled (2026-10-23).
+        #expect(LocalModel.nemotronMultilingual.downloadCommands() == "bash ~/Downloads/get-nemotron-asr-multilingual-560ms.sh")
+        #expect(!LocalModel.hyMT2SmallMLX.downloadCommands().contains("\n"))
+    }
+
+    /// Runs a folder model's real download script with macOS's bash, against a stand-in curl that records its
+    /// arguments and writes each file.
+    private func runScript(_ model: LocalModel, arguments: [String], in dir: URL) throws -> (status: Int32, curlCalls: [String]) {
+        let bin = dir.appendingPathComponent("bin"), log = dir.appendingPathComponent("curl.log")
+        try write("""
+            #!/bin/bash
+            echo "$*" >> "\(log.path)"
+            while [ $# -gt 0 ]; do if [ "$1" = "-o" ]; then out="$2"; shift; fi; shift; done
+            mkdir -p "$(dirname "$out")"; echo placeholder > "$out"
+            """, bin.appendingPathComponent("curl"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.appendingPathComponent("curl").path)
+        let script = try model.saveDownloadScript(in: dir)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [script.path] + arguments
+        process.environment = ["PATH": "\(bin.path):/usr/bin:/bin", "HOME": dir.path]
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        let calls = (try? String(contentsOf: log, encoding: .utf8))?.split(separator: "\n").map(String.init) ?? []
+        return (process.terminationStatus, calls)
+    }
+
+    @Test func theDownloadScriptRecreatesTheFolderAndPassesOptionsToEveryCurl() throws {
         let model = LocalModel.nemotronLatin
-        let lines = model.downloadCommands(into: "/tmp/x").split(separator: "\n").map(String.init)
-        #expect(lines.first == "mkdir -p /tmp/x/nemotron-asr-latin-560ms && cd /tmp/x/nemotron-asr-latin-560ms")
-        #expect(lines.count == model.files.count + 1)
-        for (line, file) in zip(lines.dropFirst(), model.files) {
-            #expect(line.hasPrefix("curl -L --fail --create-dirs -o \(file) \""), "\(line)")
-            #expect(line.contains("/resolve/\(model.revision)/latin/560ms/\(file)\""), "\(line)")
+        let dir = try scratch()
+        let run = try runScript(model, arguments: ["--cacert", "proxy root.pem"], in: dir)
+        #expect(run.status == 0)
+        #expect(run.curlCalls.count == model.files.count)
+        for (call, file) in zip(run.curlCalls, model.files) {
+            #expect(call.contains("--cacert proxy root.pem"), "\(call)")
+            #expect(call.contains("--fail") && call.contains("--create-dirs"), "\(call)")
+            #expect(call.contains("/resolve/\(model.revision)/latin/560ms/\(file)"), "\(call)")
+            #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("nemotron-asr-latin-560ms/\(file)").path), "\(file)")
         }
+    }
+
+    @Test func theDownloadScriptRunsWithNoOptionsOnMacOSBash() throws {
+        // With no options at all (most users), under set -euo pipefail, on macOS's bash 3.2.
+        let run = try runScript(.sileroVAD, arguments: [], in: try scratch())
+        #expect(run.status == 0)
+        #expect(run.curlCalls.count == LocalModel.sileroVAD.files.count)
     }
 
     // MARK: Verify and install, with a small fake model
