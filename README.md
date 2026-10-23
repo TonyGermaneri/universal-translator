@@ -264,7 +264,7 @@ iOS/UniversalTranslator/       the iPhone/iPad app: full-screen captions, contro
 iOS/UniversalTranslator.xcodeproj
 Sources/llm-bench/             developer benchmark
 Tests/TranslatorCoreTests/
-scripts/                       build-app.sh, build-ios.sh, package-macos.sh, release-notes.sh, evaluate.py, make-icon.swift
+scripts/                       build-app.sh, build-ios.sh, package-macos.sh, release-notes.sh, evaluate.py, make-icon.swift, icon-from-image.swift
 .github/workflows/             ci.yml (every push), release.yml (version tags)
 docs/                          RESEARCH.md, ROADMAP.md
 ```
