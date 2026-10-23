@@ -302,12 +302,35 @@ struct TranslationSettingsView: View {
     }
 }
 
-/// One downloadable on-device model with its status and actions.
+/// One downloadable on-device model with its status and actions, and on the Mac a way to download it by hand
+/// (for networks the app's own download can't get through) and import the result.
 struct ModelRow: View {
     let model: LocalModel
     let store: LocalModelStore
+    @State private var showManual = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            statusRow
+            #if os(macOS)
+            if store.state(model) != .ready, !isBusy {
+                DisclosureGroup("Download it yourself", isExpanded: $showManual) { manualSteps }
+                    .font(.caption)
+            }
+            #endif
+        }
+        .onAppear { if case .failed = store.state(model) { showManual = true } }
+        .onChange(of: store.state(model)) { _, state in if case .failed = state { showManual = true } }
+    }
+
+    private var isBusy: Bool {
+        switch store.state(model) {
+        case .downloading, .verifying: return true
+        default: return false
+        }
+    }
+
+    private var statusRow: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.name)
@@ -333,6 +356,9 @@ struct ModelRow: View {
                 ProgressView(value: fraction).frame(width: 110)
                 Text(Fmt.percent(fraction)).font(.caption).monospacedDigit().frame(width: 36)
                 Button("Cancel") { store.cancelDownload(model) }.buttonStyle(.borderless)
+            case .verifying:
+                ProgressView().controlSize(.small)
+                Text("Checking files…").font(.caption).foregroundStyle(.secondary)
             case .notDownloaded, .failed:
                 Button("Download (\(ByteCountFormatter.string(fromByteCount: model.bytes, countStyle: .file)))") {
                     store.download(model)
@@ -343,6 +369,44 @@ struct ModelRow: View {
     }
 
     private var tooLarge: Bool { !LocalModelStore.fitsInMemory(model) }
+
+    #if os(macOS)
+    private var manualSteps: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("If the download fails (for example behind a network proxy), run this in Terminal, then choose the \(model.isSingleFile ? "file" : "folder") it makes. Every file's checksum is checked before it's used.")
+                .foregroundStyle(.secondary)
+            ScrollView {
+                Text(model.downloadCommands())
+                    .font(.system(.caption2, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
+            .frame(maxHeight: model.isSingleFile ? 44 : 120)
+            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+            HStack {
+                Button("Copy commands") { Platform.copyToPasteboard(model.downloadCommands()) }
+                Button(model.isSingleFile ? "Choose \(model.localName)…" : "Choose the \(model.localName) folder…") { choose() }
+            }
+            if let error = store.importErrors[model.id] {
+                Text(error).foregroundStyle(.red)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = model.isSingleFile
+        panel.canChooseDirectories = !model.isSingleFile
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.message = model.isSingleFile ? "Choose \(model.localName)" : "Choose the \(model.localName) folder"
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await store.importModel(model, from: url) }
+    }
+    #endif
 }
 
 /// Editable list of glossary terms.

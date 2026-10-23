@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LocalLLM
 import LocalMLX
@@ -34,11 +35,27 @@ struct LocalModel: Identifiable, Equatable, Sendable {
         return URL(string: "https://huggingface.co/\(repository)/resolve/\(revision)/\(path)")!
     }
 
+    /// The pinned SHA-256 of each file (ModelHashes.swift, from scripts/pin-model-hashes.py).
+    var sha256: [String: String] { Self.pinnedSHA256[id] ?? [:] }
+
+    /// Terminal commands that download the model by hand into `folder`, for when the app's own download can't get
+    /// through: the one file, or the folder the app expects, file by file. Choose the result in Settings.
+    func downloadCommands(into folder: String = "~/Downloads") -> String {
+        if isSingleFile {
+            return "curl -L --fail -o \(folder)/\(localName) \"\(url(for: files[0]).absoluteString)\""
+        }
+        let directory = "\(folder)/\(localName)"
+        return (["mkdir -p \(directory) && cd \(directory)"]
+            + files.map { "curl -L --fail --create-dirs -o \($0) \"\(url(for: $0).absoluteString)\"" })
+            .joined(separator: "\n")
+    }
+
     /// Fast live translator: Tencent Hy-MT2 1.8B (Apache-2.0), 4-bit.
     static let hyMT2Small = LocalModel(
         id: "hy-mt2-1.8b-q4", name: "Hy-MT2 1.8B",
         summary: "Fast on-device translation model for live captions (~150 tokens/s on Apple silicon).",
-        repository: "tencent/Hy-MT2-1.8B-GGUF", files: ["Hy-MT2-1.8B-Q4_K_M.gguf"],
+        repository: "tencent/Hy-MT2-1.8B-GGUF", revision: "a0c709d9fac510f2c807aa3af52872340dc37a4a",
+        files: ["Hy-MT2-1.8B-Q4_K_M.gguf"],
         localName: "Hy-MT2-1.8B-Q4_K_M.gguf", bytes: 1_133_080_448
     )
 
@@ -46,7 +63,8 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     static let hyMT2Large = LocalModel(
         id: "hy-mt2-7b-q4", name: "Hy-MT2 7B",
         summary: "Higher-quality on-device model for the second pass (about 4× slower than 1.8B).",
-        repository: "tencent/Hy-MT2-7B-GGUF", files: ["Hy-MT2-7B-Q4_K_M.gguf"],
+        repository: "tencent/Hy-MT2-7B-GGUF", revision: "ab8472660ac61fac25f1af43fac2599d52a8a775",
+        files: ["Hy-MT2-7B-Q4_K_M.gguf"],
         localName: "Hy-MT2-7B-Q4_K_M.gguf", bytes: 4_620_000_000, promptFormat: .hunyuan
     )
 
@@ -138,17 +156,21 @@ final class LocalModelStore {
     enum State: Equatable {
         case notDownloaded
         case downloading(Double)
+        /// Checking the files against their pinned SHA-256 (after a download or an import).
+        case verifying
         case ready
         case failed(String)
     }
 
     private(set) var states: [String: State] = [:]
+    /// Why the last manual import of a model was refused (shown next to its Choose button).
+    private(set) var importErrors: [String: String] = [:]
     @ObservationIgnored private var downloads: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var transfers: [String: URLSessionDownloadTask] = [:]
     @ObservationIgnored private var runners: [String: any CompletionRunner] = [:]
     @ObservationIgnored private let log = Logger(subsystem: "UniversalTranslator", category: "models")
 
-    static var directory: URL {
+    nonisolated static var directory: URL {
         // Test hook: another models folder (an empty one checks what a first run asks for).
         if let path = ProcessInfo.processInfo.environment["UT_MODELS_DIR"] {
             return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
@@ -220,8 +242,11 @@ final class LocalModelStore {
                 }
                 done += (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             }
+            states[model.id] = .verifying
+            let downloaded = staging.appendingPathComponent(model.localName)
+            try await Task.detached(priority: .userInitiated) { try Self.verify(model, at: downloaded) }.value
             try? FileManager.default.removeItem(at: path(model))
-            try FileManager.default.moveItem(at: staging.appendingPathComponent(model.localName), to: path(model))
+            try FileManager.default.moveItem(at: downloaded, to: path(model))
             try? FileManager.default.removeItem(at: staging)
             #if os(iOS)
             // Models can be downloaded again; they don't belong in device backups.
@@ -272,6 +297,75 @@ final class LocalModelStore {
         }
     }
 
+    // MARK: Manual import and verification
+
+    /// Installs a model downloaded by hand (see `LocalModel.downloadCommands`): the file, or the model's folder.
+    func importModel(_ model: LocalModel, from url: URL) async {
+        guard downloads[model.id] == nil else { return }
+        let before = state(model)
+        states[model.id] = .verifying
+        importErrors[model.id] = nil
+        let directory = Self.directory
+        do {
+            try await Task.detached(priority: .userInitiated) { try Self.install(model, from: url, into: directory) }.value
+            states[model.id] = .ready
+            log.info("Imported \(model.name, privacy: .public)")
+            DebugLog.write("IMPORT \(model.id) ok")
+        } catch {
+            states[model.id] = before
+            importErrors[model.id] = error.localizedDescription
+            log.error("Import of \(model.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            DebugLog.write("IMPORT \(model.id) failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Checks every file of `model` at `url` (the file itself, or the model's folder) against its pinned SHA-256
+    /// (or `checksums`, for tests).
+    nonisolated static func verify(_ model: LocalModel, at url: URL, checksums: [String: String]? = nil) throws {
+        let pinned = checksums ?? model.sha256
+        var problems: [String] = []
+        for file in model.files {
+            let path = model.isSingleFile ? url : url.appendingPathComponent(file)
+            guard FileManager.default.fileExists(atPath: path.path) else { problems.append("\(file) is missing"); continue }
+            guard let expected = pinned[file] else { problems.append("\(file) has no pinned checksum"); continue }
+            if try sha256(of: path) != expected { problems.append("\(file) doesn't match its checksum") }
+        }
+        if !problems.isEmpty { throw LocalModelError.verificationFailed(model.name, problems) }
+    }
+
+    nonisolated static func sha256(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 8 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Verifies a hand-downloaded model and copies it into `directory`, through a staging folder like a download,
+    /// so a failed import leaves nothing behind. Only the model's own files are copied.
+    nonisolated static func install(_ model: LocalModel, from url: URL, into directory: URL,
+                                    checksums: [String: String]? = nil) throws {
+        try verify(model, at: url, checksums: checksums)
+        let fm = FileManager.default
+        let staging = directory.appendingPathComponent(".import-\(model.id)", isDirectory: true)
+        try? fm.removeItem(at: staging)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: staging) }
+        let staged = staging.appendingPathComponent(model.localName)
+        if model.isSingleFile {
+            try fm.copyItem(at: url, to: staged)
+        } else {
+            for file in model.files {
+                let to = staged.appendingPathComponent(file)
+                try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.copyItem(at: url.appendingPathComponent(file), to: to)
+            }
+        }
+        let destination = directory.appendingPathComponent(model.localName)
+        try? fm.removeItem(at: destination)
+        try fm.moveItem(at: staged, to: destination)
+    }
+
     func cancelDownload(_ model: LocalModel) {
         transfers[model.id]?.cancel()
         downloads[model.id]?.cancel()
@@ -315,6 +409,7 @@ enum LocalModelError: LocalizedError {
     case downloadFailed(String, String)
     case http(Int)
     case tooLarge(String)
+    case verificationFailed(String, [String])
 
     var errorDescription: String? {
         switch self {
@@ -326,6 +421,8 @@ enum LocalModelError: LocalizedError {
             return "The server returned HTTP \(code)."
         case .tooLarge(let name):
             return "\(name) needs more memory than this device lets an app use. Choose a smaller model."
+        case .verificationFailed(let name, let problems):
+            return "\(name) didn't pass its checksum check (\(problems.joined(separator: "; "))). Download it again."
         }
     }
 }

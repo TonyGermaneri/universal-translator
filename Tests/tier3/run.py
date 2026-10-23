@@ -6,6 +6,7 @@ checks behind the macOS 15 port and the Dock icon.
   first_run_gate   macOS 15, no models: listening refuses and names the downloads (no Apple fallback)
   dock             in the Dock by default; with "menu bar only", only while Settings or the transcript is open
   overlay_display  a position saved on a display (as a drag saves it) puts the captions there, on each display
+  model_import     hand-downloaded models (copies of the real ones) are checked and installed; a corrupt one isn't
   engine_llamacpp  Nemotron + Silero VAD + Smart Turn + Hy-MT2 1.8B (llama.cpp), scripts/evaluate.py's passages
   engine_mlx       the same with Hy-MT2 1.8B on MLX
   system_audio     a tapped process (UT_TAP_PID), launched with `open` so the app asks for its own permission
@@ -163,6 +164,38 @@ def test_dock(work, args):
     return "in the Dock by default; menu bar only hides it until a window opens"
 
 
+def test_model_import(work, args):
+    """A hand-downloaded model (copies of the real downloads) is checked and installed by the app; a corrupted copy
+    is refused and leaves nothing behind."""
+    require_models(("Silero VAD", NEEDED["Silero VAD"]), LIVE["llamaCpp"])
+    settings()
+    results = []
+    for label, model_id, local, corrupt in (("Silero VAD folder", "silero-vad-v6", NEEDED["Silero VAD"], False),
+                                            ("Hy-MT2 1.8B file", "hy-mt2-1.8b-q4", LIVE["llamaCpp"][1], False),
+                                            ("corrupted Silero VAD", "silero-vad-v6", NEEDED["Silero VAD"], True)):
+        source = os.path.join(work, f"download-{len(results)}", local)
+        os.makedirs(os.path.dirname(source))
+        subprocess.run(["cp", "-cR", os.path.join(MODELS, local), source], check=True)  # APFS clone: instant
+        if corrupt:
+            with open(os.path.join(source, "weights", "weight.bin"), "ab") as f:
+                f.write(b"\0")
+        models, log = tempfile.mkdtemp(dir=work), os.path.join(work, f"import-{len(results)}.log")
+        launch({"UT_MODELS_DIR": models, "UT_IMPORT_MODEL": f"{model_id}={source}", "UT_DEBUG_LOG": log})
+        done = wait_for(log, rf"IMPORT {model_id} (ok|failed)", 60)
+        quit_app()
+        text = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+        assert done, f"{label}: the app didn't finish the import"
+        installed = os.path.exists(os.path.join(models, local))
+        if corrupt:
+            assert "failed" in text and "weights/weight.bin doesn't match its checksum" in text, f"{label}: {text.strip()}"
+            assert not installed, f"{label}: installed anyway"
+        else:
+            assert f"IMPORT {model_id} ok" in text, f"{label}: {text.strip()}"
+            assert installed, f"{label}: not in the models folder"
+        results.append(label)
+    return "imported " + ", ".join(results[:2]) + "; refused the corrupted copy"
+
+
 def geometry(pid=None):
     out = subprocess.run(["swift", os.path.join(ROOT, "Tests", "tier3", "geometry.swift")] + ([str(pid)] if pid else []),
                          capture_output=True, text=True, check=True).stdout
@@ -288,6 +321,7 @@ def test_mic(work, args):
 
 
 TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
+         ("model_import", test_model_import),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
 

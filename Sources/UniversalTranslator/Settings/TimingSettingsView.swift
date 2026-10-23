@@ -42,6 +42,11 @@ struct TimingSettingsView: View {
                 ForEach(LocalModel.speechModels) { model in
                     ModelRow(model: model, store: LocalModelStore.shared)
                 }
+                if LocalModel.speechModels.contains(where: { if case .failed = LocalModelStore.shared.state($0) { return true }; return false }) {
+                    Label("A download failed, so a level-based detector and a fixed pause are in use until these models are downloaded.",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
                 Note("Both models are small (18 MB together), take a few milliseconds per check, and are downloaded automatically the first time you start listening. Without them, a level-based detector and a fixed pause are used.")
             } header: {
                 Text("End of thought")

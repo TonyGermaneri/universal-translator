@@ -17,7 +17,7 @@ There is also an [iPhone and iPad app](#iphone-and-ipad) with the same engine. I
 
 - macOS 15 or later on Apple silicon (developed on macOS 27, M3 Max; tested on macOS 15.8, M4). Apple Speech, Apple Translation and the Apple Intelligence model need macOS 26 (Apple Translation's low-latency model, 26.4); on macOS 15, Nemotron and Hy-MT2 (or LM Studio) do all the work, so they must be downloaded before the first session.
 - Xcode 27 (Swift 6.2+), or Xcode 26.3 on macOS 15 (the build scripts take care of it). The build uses `xcodebuild`, which compiles MLX's Metal shaders. On a fresh Xcode install, run `sudo xcodebuild -runFirstLaunch` and `xcodebuild -downloadComponent MetalToolchain` once.
-- Disk for on-device models, all downloaded from within the app:
+- Disk for on-device models, all downloaded from within the app (or, where a network proxy blocks that, by hand with the commands under each model's "Download it yourself", then chosen in Settings; every file is checked against a pinned SHA-256 either way):
 
   | Model | Size | Use |
   | --- | --- | --- |

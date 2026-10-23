@@ -33,6 +33,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         case "transcript": openTranscript()
         default: break
         }
+        // Test hook: "<model id>=<path>" imports a hand-downloaded model at launch, as Settings' Choose button does.
+        if let spec = ProcessInfo.processInfo.environment["UT_IMPORT_MODEL"],
+           let split = spec.firstIndex(of: "="),
+           let model = LocalModel.catalog.first(where: { $0.id == spec[..<split] }) {
+            let path = String(spec[spec.index(after: split)...])
+            Task { await LocalModelStore.shared.importModel(model, from: URL(fileURLWithPath: path)) }
+        }
         if ProcessInfo.processInfo.environment["UT_AUTOSTART"] == "1" {
             controller.start()
             // Test hook: "9,14" pauses 9 s after launch and resumes at 14 s.
