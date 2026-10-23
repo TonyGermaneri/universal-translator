@@ -73,6 +73,7 @@ final class TranslatorController {
             log.info("Listening")
         } catch {
             log.error("Start failed: \(error.localizedDescription, privacy: .public)")
+            DebugLog.write("START failed: \(error.localizedDescription)")
             await engine?.stop()
             engine = nil
             isListening = false
@@ -81,26 +82,36 @@ final class TranslatorController {
         }
     }
 
-    /// Apple Speech, or Nemotron when it's chosen and downloaded.
     private func makeRecognizer() -> SpeechRecognizer {
-        let nemotron = settings.settings.recognizer == .nemotron
-            && LocalModelStore.shared.isDownloaded(.nemotron(for: settings.settings.sourceLocale))
-        if #available(macOS 26, *), !nemotron { return AppleRecognizer() }
+        let kind = Self.recognizer(chosen: settings.settings.recognizer,
+                                   nemotronReady: LocalModelStore.shared.isDownloaded(.nemotron(for: settings.settings.sourceLocale)),
+                                   hasAppleModels: Platform.hasAppleModels)
+        if #available(macOS 26, *), kind == .appleSpeech { return AppleRecognizer() }
         // Before macOS 26 Nemotron is the only recognizer; `checkRequiredModels()` made sure it's downloaded.
         return NemotronRecognizer()
+    }
+
+    /// Apple Speech when it's chosen or while Nemotron isn't downloaded, if the system has it; otherwise Nemotron.
+    nonisolated static func recognizer(chosen: SpeechRecognizerKind, nemotronReady: Bool, hasAppleModels: Bool) -> SpeechRecognizerKind {
+        hasAppleModels && (chosen == .appleSpeech || !nemotronReady) ? .appleSpeech : .nemotron
     }
 
     /// Before macOS 26 there's no Apple Speech or Translation to use while Nemotron or Hy-MT2 isn't downloaded, so
     /// listening needs them first.
     private func checkRequiredModels() throws {
         guard !Platform.hasAppleModels else { return }
-        let s = settings.settings
+        let missing = Self.requiredModels(for: settings.settings).filter { !LocalModelStore.shared.isDownloaded($0) }
+        if !missing.isEmpty { throw EngineError.modelsRequired(missing.map(\.name)) }
+    }
+
+    /// The downloads listening needs where nothing can stand in for them (before macOS 26): Nemotron for the speech
+    /// language, and the live Hy-MT2 model when it's the live translator.
+    nonisolated static func requiredModels(for s: AppSettings) -> [LocalModel] {
         var required: [LocalModel] = [.nemotron(for: s.sourceLocale)]
         if s.translation.backend == .localLLM || s.translation.backend.needsAppleModels {
             required.append(.live(s.translation.localEngine))
         }
-        let missing = required.filter { !LocalModelStore.shared.isDownloaded($0) }
-        if !missing.isEmpty { throw EngineError.modelsRequired(missing.map(\.name)) }
+        return required
     }
 
     private func stopEngine() async {

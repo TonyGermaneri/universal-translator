@@ -117,8 +117,12 @@ final class AppController: NSObject, NSApplicationDelegate {
     /// included, so it's easy to get back to; or all the time if `showInDock` is on.
     private func updateDockIcon() {
         let windowOpen = [settingsWindow, transcriptWindow].contains { $0?.isVisible == true || $0?.isMiniaturized == true }
-        let policy: NSApplication.ActivationPolicy = settings.settings.showInDock || windowOpen ? .regular : .accessory
+        let policy = Self.dockPolicy(showInDock: settings.settings.showInDock, windowOpen: windowOpen)
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
+    }
+
+    nonisolated static func dockPolicy(showInDock: Bool, windowOpen: Bool) -> NSApplication.ActivationPolicy {
+        showInDock || windowOpen ? .regular : .accessory
     }
 
     private func observeClose(of window: NSWindow) {

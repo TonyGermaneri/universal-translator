@@ -149,6 +149,10 @@ final class LocalModelStore {
     @ObservationIgnored private let log = Logger(subsystem: "UniversalTranslator", category: "models")
 
     static var directory: URL {
+        // Test hook: another models folder (an empty one checks what a first run asks for).
+        if let path = ProcessInfo.processInfo.environment["UT_MODELS_DIR"] {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Universal Translator/Models", isDirectory: true)
     }

@@ -36,6 +36,8 @@ if (( SWIFT_MAJOR < 6 || (SWIFT_MAJOR == 6 && SWIFT_MINOR < 3) )); then
 fi
 xcodebuild build -scheme UniversalTranslator -configuration Release -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath "$DERIVED" -skipMacroValidation -skipPackagePluginValidation -quiet
+# Restored now rather than at exit, so the health check below sees the checked-in file.
+if [[ -n "${RESOLVED_BACKUP:-}" ]]; then cp "$RESOLVED_BACKUP" Package.resolved; fi
 BIN_DIR="$DERIVED/Build/Products/Release"
 
 rm -rf "$APP"
@@ -88,6 +90,8 @@ else
 fi
 codesign --verify --deep --strict "$APP"
 echo "Built $APP ($SHORT_VERSION)"
+# Tier 2: deployment target, weak links, bundled shaders, pins (Tests/tier2/check.sh).
+Tests/tier2/check.sh "$APP"
 
 case "${1:-}" in
     --run)

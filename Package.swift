@@ -78,5 +78,12 @@ let package = Package(
             dependencies: ["TranslatorCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        // The Mac app's own decisions (engine choices with and without Apple's macOS 26 models, the Dock), through
+        // `@testable import` of the executable.
+        .testTarget(
+            name: "UniversalTranslatorTests",
+            dependencies: ["UniversalTranslator"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

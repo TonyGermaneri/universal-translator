@@ -37,7 +37,8 @@ enum SpeechRecognizerKind: String, Codable, CaseIterable, Identifiable {
         }
     }
     /// The choices this system offers (Apple Speech needs macOS 26).
-    static var selectable: [Self] { Platform.hasAppleModels ? allCases : [.nemotron] }
+    static var selectable: [Self] { choices(hasAppleModels: Platform.hasAppleModels) }
+    static func choices(hasAppleModels: Bool) -> [Self] { hasAppleModels ? allCases : [.nemotron] }
 }
 
 /// The translator that produces live captions while the speaker talks.
@@ -60,7 +61,8 @@ enum TranslatorKind: String, Codable, CaseIterable, Identifiable {
     }
     var needsAppleModels: Bool { self == .apple || self == .appleIntelligence }
     /// The choices this system offers (Apple Translation and Apple Intelligence need macOS 26).
-    static var selectable: [Self] { Platform.hasAppleModels ? allCases : allCases.filter { !$0.needsAppleModels } }
+    static var selectable: [Self] { choices(hasAppleModels: Platform.hasAppleModels) }
+    static func choices(hasAppleModels: Bool) -> [Self] { hasAppleModels ? allCases : allCases.filter { !$0.needsAppleModels } }
 }
 
 /// The runtime for the on-device Hy-MT2 models. Each has its own downloads.
@@ -99,15 +101,16 @@ enum RevisionBackend: String, Codable, CaseIterable, Identifiable {
     }
     var needsAppleModels: Bool { self == .appleHighFidelity || self == .appleIntelligence }
     /// The choices this system offers (Apple Translation and Apple Intelligence need macOS 26).
-    static var selectable: [Self] { Platform.hasAppleModels ? allCases : allCases.filter { !$0.needsAppleModels } }
+    static var selectable: [Self] { choices(hasAppleModels: Platform.hasAppleModels) }
+    static func choices(hasAppleModels: Bool) -> [Self] { hasAppleModels ? allCases : allCases.filter { !$0.needsAppleModels } }
 }
 
 extension AppSettings {
     /// Before macOS 26, replaces Apple's engines (in settings imported from a newer Mac) with the app's own.
-    func withoutUnavailableEngines() -> AppSettings {
-        guard !Platform.hasAppleModels else { return self }
+    func withoutUnavailableEngines(hasAppleModels: Bool = Platform.hasAppleModels) -> AppSettings {
+        guard !hasAppleModels else { return self }
         var s = self
-        if !SpeechRecognizerKind.selectable.contains(s.recognizer) { s.recognizer = .nemotron }
+        if !SpeechRecognizerKind.choices(hasAppleModels: false).contains(s.recognizer) { s.recognizer = .nemotron }
         if s.translation.backend.needsAppleModels { s.translation.backend = .localLLM }
         if s.translation.revision.needsAppleModels { s.translation.revision = .localLLMLarge }
         return s

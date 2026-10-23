@@ -36,6 +36,9 @@ scripts/build-app.sh --run      # …and launches it
 scripts/build-app.sh --install  # …copies it to /Applications and launches it
 swift test                      # unit tests: policy, transcript alignment, frontier, turns, revisions, prompts, reading speed
 scripts/evaluate.py --target ja # end-to-end latency, stability and accuracy report (see below)
+Tests/tier1/run.sh              # the unit tests, safe on Xcode 26.3 too (keeps Package.resolved as committed)
+Tests/tier2/check.sh --network  # build and Mac health (build-app.sh runs it without --network)
+Tests/tier3/run.py --speaker    # the built app, live: first run, Dock, both engines, system audio, microphone
 ```
 
 The script signs with the first *Developer ID Application* or *Apple Development* identity in your keychain (override with `SIGN_IDENTITY`; change the bundle id with `BUNDLE_ID`). A stable signature means macOS keeps the microphone and system-audio permissions across rebuilds.

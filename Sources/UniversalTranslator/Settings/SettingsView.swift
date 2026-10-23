@@ -261,10 +261,5 @@ struct GeneralSettings: View {
     }
 
     /// What listening needs before macOS 26, where there's no Apple Speech or Translation to fall back on.
-    private var requiredModels: [LocalModel] {
-        let s = store.settings
-        var models: [LocalModel] = [.nemotron(for: s.sourceLocale)]
-        if s.translation.backend == .localLLM { models.append(.live(s.translation.localEngine)) }
-        return models
-    }
+    private var requiredModels: [LocalModel] { TranslatorController.requiredModels(for: store.settings) }
 }

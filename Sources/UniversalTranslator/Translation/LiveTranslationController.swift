@@ -84,26 +84,11 @@ final class LiveTranslationController {
         let models = LocalModelStore.shared
         let small = LocalModel.live(s.translation.localEngine)
         let large = LocalModel.reviser(s.translation.localEngine)
-        var backend = s.translation.backend
-        var revision = s.translation.revision
-        if !Platform.hasAppleModels {
-            // Before macOS 26: no Apple Translation or Apple Intelligence (e.g. in settings imported from a newer
-            // Mac), and nothing to fall back on while a model downloads.
-            if backend.needsAppleModels { backend = .localLLM }
-            if revision.needsAppleModels { revision = .off }
-            if backend == .localLLM, !models.isDownloaded(small) { throw LocalModelError.notDownloaded(small.name) }
-        }
-        if backend == .localLLM, !models.isDownloaded(small) {
-            backend = .apple
-            notice = "Using Apple Translation until \(small.name) is downloaded (Settings → Translation)."
-        }
-        if revision == .localLLMLarge, !models.isDownloaded(large) {
-            // Apple's reviser disagrees with an LLM's wording too often to be worth the churn.
-            revision = backend == .localLLM || !Platform.hasAppleModels ? .off : .appleHighFidelity
-        }
-        if revision == .localLLMSmall, !models.isDownloaded(small) {
-            revision = Platform.hasAppleModels ? .appleHighFidelity : .off
-        }
+        let choice = try Self.translators(backend: s.translation.backend, revision: s.translation.revision, small: small,
+                                          smallReady: models.isDownloaded(small), largeReady: models.isDownloaded(large),
+                                          hasAppleModels: Platform.hasAppleModels)
+        let backend = choice.backend, revision = choice.revision
+        notice = choice.notice
 
         let live: SentenceTranslator = switch backend {
         case .localLLM:
@@ -415,6 +400,31 @@ struct SentenceMetrics {
 
 // Apple Translation and the Apple Intelligence model need macOS 26; `configure()` doesn't choose them before that.
 extension LiveTranslationController {
+    /// The live and second-pass translators `configure()` builds, from the chosen ones and what's downloaded. With
+    /// Apple's models (macOS 26) a missing Hy-MT2 falls back to Apple Translation; without them there's no fallback.
+    nonisolated static func translators(backend: TranslatorKind, revision: RevisionBackend, small: LocalModel,
+                                        smallReady: Bool, largeReady: Bool, hasAppleModels: Bool) throws
+        -> (backend: TranslatorKind, revision: RevisionBackend, notice: String?) {
+        var backend = backend, revision = revision, notice: String?
+        if !hasAppleModels {
+            // Before macOS 26: no Apple Translation or Apple Intelligence (e.g. in settings imported from a newer
+            // Mac), and nothing to fall back on while a model downloads.
+            if backend.needsAppleModels { backend = .localLLM }
+            if revision.needsAppleModels { revision = .off }
+            if backend == .localLLM, !smallReady { throw LocalModelError.notDownloaded(small.name) }
+        }
+        if backend == .localLLM, !smallReady {
+            backend = .apple
+            notice = "Using Apple Translation until \(small.name) is downloaded (Settings → Translation)."
+        }
+        if revision == .localLLMLarge, !largeReady {
+            // Apple's reviser disagrees with an LLM's wording too often to be worth the churn.
+            revision = backend == .localLLM || !hasAppleModels ? .off : .appleHighFidelity
+        }
+        if revision == .localLLMSmall, !smallReady { revision = hasAppleModels ? .appleHighFidelity : .off }
+        return (backend, revision, notice)
+    }
+
     static func appleTranslator(source: Locale.Language, target: Locale.Language, lowLatency: Bool) throws -> SentenceTranslator {
         guard #available(macOS 26, *) else { throw TranslatorError.needsMacOS26("Apple Translation") }
         return AppleTranslator(source: source, target: target, lowLatency: lowLatency)
