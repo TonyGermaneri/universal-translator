@@ -225,7 +225,7 @@ struct GeneralSettings: View {
 
             Section("Startup") {
                 Toggle("Start listening when the app launches", isOn: $store.settings.startListeningAtLaunch)
-                Toggle("Always show in the Dock", isOn: $store.settings.showInDock)
+                Toggle("Menu bar only (no Dock icon while no window is open)", isOn: $store.settings.menuBarOnly)
                 Toggle("Open at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
                         do {
@@ -234,7 +234,7 @@ struct GeneralSettings: View {
                             launchAtLogin = SMAppService.mainApp.status == .enabled
                         }
                     }
-                Note("Otherwise the Dock icon shows only while a Universal Translator window is open. The menu bar icon is always there, but on a Mac with a notch, macOS hides menu bar icons that don't fit; open the app again from Spotlight or Finder to bring back Settings.")
+                Note("Closing this window keeps Universal Translator running, in the Dock and the menu bar; quit it with ⌘Q or from either menu. In menu bar only mode, note that on a Mac with a notch macOS hides menu bar icons that don't fit; open the app again from Spotlight or Finder to bring back Settings.")
             }
         }
         .task {

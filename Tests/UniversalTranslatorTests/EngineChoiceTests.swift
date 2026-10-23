@@ -160,11 +160,19 @@ import Testing
 
     // MARK: Dock
 
-    @Test func dockIconWhileAWindowIsOpenOrWhenAskedFor() {
-        #expect(AppController.dockPolicy(showInDock: false, windowOpen: false) == .accessory)
-        #expect(AppController.dockPolicy(showInDock: false, windowOpen: true) == .regular)
-        #expect(AppController.dockPolicy(showInDock: true, windowOpen: false) == .regular)
-        #expect(AppController.dockPolicy(showInDock: true, windowOpen: true) == .regular)
-        #expect(AppSettings.defaults.showInDock == false)
+    @Test func inTheDockUntilQuitUnlessMenuBarOnly() {
+        // Default: in the Dock with or without a window, like any app (a crowded menu bar can hide the menu bar icon).
+        #expect(AppSettings.defaults.menuBarOnly == false)
+        #expect(AppController.dockPolicy(menuBarOnly: false, windowOpen: false) == .regular)
+        #expect(AppController.dockPolicy(menuBarOnly: false, windowOpen: true) == .regular)
+        // Menu bar only: in the Dock just while a window is open.
+        #expect(AppController.dockPolicy(menuBarOnly: true, windowOpen: false) == .accessory)
+        #expect(AppController.dockPolicy(menuBarOnly: true, windowOpen: true) == .regular)
+    }
+
+    @Test @MainActor func settingsSavedBeforeTheDockDefaultStillGetTheDock() throws {
+        // Builds before this default saved `showInDock: false`; it must not mean "menu bar only".
+        let loaded = try SettingsStore.decodeMergingDefaults(Data(#"{"showInDock":false}"#.utf8))
+        #expect(loaded.menuBarOnly == false)
     }
 }

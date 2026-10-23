@@ -4,7 +4,7 @@ settings, debug log, audio from a file or a tapped process) and checks what it d
 checks behind the macOS 15 port and the Dock icon.
 
   first_run_gate   macOS 15, no models: listening refuses and names the downloads (no Apple fallback)
-  dock             menu-bar-only with no window; Dock icon with Settings or the transcript open, or when asked for
+  dock             in the Dock by default; with "menu bar only", only while Settings or the transcript is open
   engine_llamacpp  Nemotron + Silero VAD + Smart Turn + Hy-MT2 1.8B (llama.cpp), scripts/evaluate.py's passages
   engine_mlx       the same with Hy-MT2 1.8B on MLX
   system_audio     a tapped process (UT_TAP_PID), launched with `open` so the app asks for its own permission
@@ -150,14 +150,16 @@ def test_dock(work, args):
         quit_app()
         return out.rsplit("=", 1)[-1].strip().strip('"')
     results = {}
-    for name, extra, dock in (("no window", {}, False), ("settings", {"UT_OPEN": "settings"}, False),
-                              ("transcript", {"UT_OPEN": "transcript"}, False), ("always", {}, True)):
-        settings(showInDock=dock)
+    for name, extra, menu_bar_only in (("default", {}, False), ("menu bar only", {}, True),
+                                       ("menu bar only + settings", {"UT_OPEN": "settings"}, True),
+                                       ("menu bar only + transcript", {"UT_OPEN": "transcript"}, True)):
+        settings(menuBarOnly=menu_bar_only)
         launch(extra)
         results[name] = app_type()
-    expected = {"no window": "UIElement", "settings": "Foreground", "transcript": "Foreground", "always": "Foreground"}
+    expected = {"default": "Foreground", "menu bar only": "UIElement", "menu bar only + settings": "Foreground",
+                "menu bar only + transcript": "Foreground"}
     assert results == expected, f"got {results}, expected {expected}"
-    return "menu bar only with no window; Dock with Settings, transcript, or 'always'"
+    return "in the Dock by default; menu bar only hides it until a window opens"
 
 
 def engine(engine_name, work, args):

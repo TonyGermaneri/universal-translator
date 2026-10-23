@@ -23,7 +23,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         registerHotkeys()
         settings.observe { [weak self] old, new in
             if old.hotkeys != new.hotkeys { self?.registerHotkeys() }
-            if old.showInDock != new.showInDock { self?.updateDockIcon() }
+            if old.menuBarOnly != new.menuBarOnly { self?.updateDockIcon() }
         }
         updateDockIcon()
 
@@ -113,16 +113,17 @@ final class AppController: NSObject, NSApplicationDelegate {
         transcriptWindow?.makeKeyAndOrderFront(nil)
     }
 
-    /// A menu bar app, with a Dock icon (and a place in ⌘-Tab) while one of its windows is open, minimized
-    /// included, so it's easy to get back to; or all the time if `showInDock` is on.
+    /// In the Dock (and ⌘-Tab) like any app, until it's quit: a crowded menu bar can hide the menu bar icon entirely.
+    /// With `menuBarOnly`, a menu bar app that's in the Dock only while one of its windows is open (minimized
+    /// included), so it's still easy to get back to.
     private func updateDockIcon() {
         let windowOpen = [settingsWindow, transcriptWindow].contains { $0?.isVisible == true || $0?.isMiniaturized == true }
-        let policy = Self.dockPolicy(showInDock: settings.settings.showInDock, windowOpen: windowOpen)
+        let policy = Self.dockPolicy(menuBarOnly: settings.settings.menuBarOnly, windowOpen: windowOpen)
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
 
-    nonisolated static func dockPolicy(showInDock: Bool, windowOpen: Bool) -> NSApplication.ActivationPolicy {
-        showInDock || windowOpen ? .regular : .accessory
+    nonisolated static func dockPolicy(menuBarOnly: Bool, windowOpen: Bool) -> NSApplication.ActivationPolicy {
+        menuBarOnly && !windowOpen ? .accessory : .regular
     }
 
     private func observeClose(of window: NSWindow) {

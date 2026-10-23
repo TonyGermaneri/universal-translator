@@ -438,8 +438,8 @@ struct AppSettings: Codable, Equatable {
     var inputDeviceUID: String = ""
     var micSensitivity: Double = 0.6
     var startListeningAtLaunch: Bool = false
-    /// Keep the Dock icon even with no window open (otherwise it shows only while Settings or the transcript is open).
-    var showInDock = false
+    /// A menu bar app: no Dock icon unless Settings or the transcript is open (otherwise it's in the Dock until quit).
+    var menuBarOnly = false
     var timing = TimingSettings()
     var translation = TranslationSettings()
     var overlay = OverlaySettings()
