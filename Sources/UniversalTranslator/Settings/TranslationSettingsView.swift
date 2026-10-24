@@ -309,6 +309,8 @@ struct ModelRow: View {
     let store: LocalModelStore
     @State private var showManual = false
     @State private var scriptError: String?
+    /// What the copy button just did.
+    @State private var copied: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -376,7 +378,7 @@ struct ModelRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(model.isSingleFile
                  ? "If the download fails (for example behind a network proxy), run this in Terminal, then choose the file it makes. Every file's checksum is checked before it's used."
-                 : "If the download fails (for example behind a network proxy): Copy command saves a download script to your Downloads folder and copies the one line that runs it. Paste that into Terminal, then choose the folder it makes. Anything after the script name goes to every curl (for example --cacert for a proxy's certificate). Every file's checksum is checked before it's used.")
+                 : "If the download fails (for example behind a network proxy): this model is \(model.files.count) files, so the button below saves a download script to your Downloads folder and copies the one line that runs it. Paste that into Terminal, then choose the folder it makes. Anything after the script name goes to every curl (for example --cacert for a proxy's certificate). Every file's checksum is checked before it's used.")
                 .foregroundStyle(.secondary)
             Text(model.downloadCommands())
                 .font(.system(.caption2, design: .monospaced))
@@ -385,11 +387,13 @@ struct ModelRow: View {
                 .padding(6)
                 .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
             HStack {
-                Button("Copy command") { copyCommand() }
+                Button(model.isSingleFile ? "Copy command" : "Save script to Downloads & copy command") { copyCommand() }
                 Button(model.isSingleFile ? "Choose \(model.localName)…" : "Choose the \(model.localName) folder…") { choose() }
             }
             if let error = scriptError ?? store.importErrors[model.id] {
                 Text(error).foregroundStyle(.red)
+            } else if let copied {
+                Text(copied).foregroundStyle(.secondary)
             }
         }
         .padding(.top, 4)
@@ -398,10 +402,12 @@ struct ModelRow: View {
     /// Copies the command; for a folder model, first saves the script it runs into Downloads.
     private func copyCommand() {
         scriptError = nil
+        copied = "Copied. Paste it into Terminal."
         if !model.isSingleFile {
             do {
                 guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
-                _ = try model.saveDownloadScript(in: downloads)
+                let script = try model.saveDownloadScript(in: downloads)
+                copied = "Saved \(script.lastPathComponent) in Downloads, and copied the command that runs it. Paste it into Terminal."
             } catch {
                 scriptError = "Couldn't save the download script: \(error.localizedDescription)"
                 return
