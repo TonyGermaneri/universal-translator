@@ -26,6 +26,9 @@ final class OverlayPanel: NSPanel {
 @MainActor
 final class OverlayController: NSObject {
     private let panel = OverlayPanel()
+    private let grip = GripPanel()
+    private var gripShown = false
+    private var mouseLastOver: Date?
     private let layout = OverlayLayout()
     private let settings: SettingsStore
     private let captions: CaptionStore
@@ -36,9 +39,10 @@ final class OverlayController: NSObject {
     private var lastMouseScreen: NSScreen?
     private var drag: (mouse: NSPoint, frame: NSRect)?
     private var timer: Timer?
+    private var hoverTimer: Timer?
 
     var isShownByUser: Bool { !userHidden }
-    var isLocked: Bool { settings.settings.overlay.clickThrough }
+    var isPositionLocked: Bool { settings.settings.overlay.lockPosition }
 
     init(settings: SettingsStore, captions: CaptionStore) {
         self.settings = settings
@@ -47,14 +51,14 @@ final class OverlayController: NSObject {
 
         let root = OverlayRootView(
             settings: settings, captions: captions, layout: layout,
-            onHeightChange: { [weak self] in self?.contentHeightChanged($0) },
-            onDrag: { [weak self] in self?.handleMove($0) },
-            onResize: { [weak self] in self?.handleResize($0) }
+            onHeightChange: { [weak self] in self?.contentHeightChanged($0) }
         )
         let host = NSHostingView(rootView: root)
         host.sizingOptions = []
         panel.contentView = host
         panel.alphaValue = 0
+        grip.contentView = NSHostingView(rootView: GripView(onMove: { [weak self] in self?.handleMove($0) },
+                                                            onResize: { [weak self] in self?.handleResize($0) }))
 
         applyWindowSettings()
         reposition()
@@ -72,6 +76,10 @@ final class OverlayController: NSObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        // The grip follows the mouse more closely than captions need to.
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateGrip() }
+        }
     }
 
     // MARK: Public controls
@@ -86,10 +94,10 @@ final class OverlayController: NSObject {
         updateVisibility()
     }
 
+    /// Locks or unlocks the captions' position (whether hovering shows the move grip).
     func toggleLock() {
-        settings.settings.overlay.clickThrough.toggle()
-        if !settings.settings.overlay.clickThrough { userHidden = false }
-        updateVisibility()
+        settings.settings.overlay.lockPosition.toggle()
+        updateGrip()
     }
 
     // MARK: Window configuration
@@ -100,9 +108,11 @@ final class OverlayController: NSObject {
         var behavior: NSWindow.CollectionBehavior = [.fullScreenAuxiliary, .ignoresCycle, .stationary]
         behavior.insert(o.allSpaces ? .canJoinAllSpaces : .moveToActiveSpace)
         panel.collectionBehavior = behavior
-        panel.ignoresMouseEvents = o.clickThrough
+        // The captions never take the mouse; only the grip does.
+        panel.ignoresMouseEvents = true
         panel.sharingType = o.hideFromScreenCapture ? .none : .readOnly
-        layout.isUnlocked = !o.clickThrough
+        grip.level = panel.level
+        grip.collectionBehavior = behavior
     }
 
     private func targetScreen() -> NSScreen {
@@ -125,11 +135,10 @@ final class OverlayController: NSObject {
         let area = o.level == .aboveEverything ? screen.frame.insetBy(dx: 0, dy: 0) : screen.visibleFrame
         let visible = screen.visibleFrame
 
-        let chrome: CGFloat = layout.isUnlocked ? 12 : 0
         let width = max(240, min(visible.width - 2 * min(o.marginX, visible.width / 4), visible.width * o.widthFraction))
         layout.width = width
         let height = min(contentHeight, visible.height - 2 * o.marginY)
-        let size = NSSize(width: width + chrome, height: max(height, 20))
+        let size = NSSize(width: width, height: max(height, 20))
 
         var origin = NSPoint.zero
         let left = visible.minX + o.marginX
@@ -156,6 +165,7 @@ final class OverlayController: NSObject {
         origin.x = min(max(origin.x, visible.minX), visible.maxX - size.width)
         origin.y = min(max(origin.y, visible.minY), visible.maxY - size.height)
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        if gripShown { grip.setFrame(Self.gripFrame(for: panel.frame, size: GripPanel.size, in: visible), display: true) }
     }
 
     private func contentHeightChanged(_ height: CGFloat) {
@@ -164,9 +174,37 @@ final class OverlayController: NSObject {
         reposition()
     }
 
-    // MARK: Dragging (only when unlocked)
+    // MARK: The grip: shown while the mouse is over the captions; dragging it moves them
 
-    private func handleMove(_ phase: OverlayRootView.DragPhase) {
+    private func updateGrip() {
+        let mouse = NSEvent.mouseLocation
+        let over = isVisible && (panel.frame.insetBy(dx: -8, dy: -8).contains(mouse) || (gripShown && grip.frame.contains(mouse)))
+        if over { mouseLastOver = Date() }
+        let show = Self.showsGrip(locked: isPositionLocked, captionsShown: isVisible, dragging: drag != nil, mouseOver: over,
+                                  secondsSinceOver: mouseLastOver.map { Date().timeIntervalSince($0) })
+        guard show != gripShown else { return }
+        gripShown = show
+        if show {
+            let visible = (panel.screen ?? targetScreen()).visibleFrame
+            grip.setFrame(Self.gripFrame(for: panel.frame, size: GripPanel.size, in: visible), display: true)
+            panel.addChildWindow(grip, ordered: .above)
+            grip.orderFrontRegardless()
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            grip.animator().alphaValue = show ? 1 : 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.gripShown else { return }
+                self.panel.removeChildWindow(self.grip)
+                self.grip.orderOut(nil)
+            }
+        })
+    }
+
+    // MARK: Dragging (from the grip)
+
+    private func handleMove(_ phase: DragPhase) {
         let mouse = NSEvent.mouseLocation
         switch phase {
         case .changed:
@@ -180,7 +218,7 @@ final class OverlayController: NSObject {
         }
     }
 
-    private func handleResize(_ phase: OverlayRootView.DragPhase) {
+    private func handleResize(_ phase: DragPhase) {
         let mouse = NSEvent.mouseLocation
         switch phase {
         case .changed:
@@ -248,8 +286,9 @@ final class OverlayController: NSObject {
             captions.clear()
         }
         let hasContent = captions.hasVisibleText || captions.status != .idle
-        var show = !userHidden && (hasContent || layout.isUnlocked)
-        if show, o.autoHide, !layout.isUnlocked, !captions.isSpeaking, !scrolling, idle > max(o.autoHideDelay, reading) {
+        var show = !userHidden && hasContent
+        // Not while the mouse is on the grip: the captions shouldn't fade out from under a drag.
+        if show, o.autoHide, !gripShown, !captions.isSpeaking, !scrolling, idle > max(o.autoHideDelay, reading) {
             if case .preparing = captions.status {} else { show = false }
         }
         guard show != isVisible else { return }

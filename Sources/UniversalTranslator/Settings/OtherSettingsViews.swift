@@ -14,7 +14,7 @@ struct ShortcutSettings: View {
                 HotkeyRecorder(title: "Start / stop listening", hotkey: $store.settings.hotkeys.toggleListening)
                 HotkeyRecorder(title: "Pause / resume", hotkey: $store.settings.hotkeys.pauseResume)
                 HotkeyRecorder(title: "Show / hide overlay", hotkey: $store.settings.hotkeys.toggleOverlay)
-                HotkeyRecorder(title: "Lock / unlock overlay", hotkey: $store.settings.hotkeys.toggleLock)
+                HotkeyRecorder(title: "Lock / unlock caption position", hotkey: $store.settings.hotkeys.toggleLock)
                 HotkeyRecorder(title: "Clear captions", hotkey: $store.settings.hotkeys.clearCaptions)
                 HotkeyRecorder(title: "Show transcript", hotkey: $store.settings.hotkeys.showTranscript)
             } footer: {

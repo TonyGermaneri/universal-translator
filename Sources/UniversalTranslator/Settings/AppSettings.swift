@@ -346,7 +346,8 @@ struct OverlaySettings: Codable, Equatable {
 
     // Window behavior
     var level: OverlayLevel = .aboveEverything
-    var clickThrough: Bool = true
+    /// No move grip when hovering over the captions (they always let clicks through either way).
+    var lockPosition = false
     var allSpaces: Bool = true
     var hideFromScreenCapture: Bool = false
     var autoHide: Bool = true
@@ -487,10 +488,10 @@ enum OverlayPreset: String, CaseIterable, Identifiable {
 
     /// Applies the preset's look while keeping the user's display and behavior choices.
     func apply(to o: inout OverlaySettings) {
-        let keep = (o.screenMode, o.screenName, o.level, o.clickThrough, o.allSpaces, o.hideFromScreenCapture)
+        let keep = (o.screenMode, o.screenName, o.level, o.lockPosition, o.allSpaces, o.hideFromScreenCapture)
         let base = AppSettings.defaults.overlay
         o = base
-        (o.screenMode, o.screenName, o.level, o.clickThrough, o.allSpaces, o.hideFromScreenCapture) = keep
+        (o.screenMode, o.screenName, o.level, o.lockPosition, o.allSpaces, o.hideFromScreenCapture) = keep
         switch self {
         case .subtitles:
             // Roll-up captions in a centered block above the bottom edge.

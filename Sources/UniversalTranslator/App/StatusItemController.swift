@@ -61,8 +61,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         menu.addItem(action(app.overlay.isShownByUser ? "Hide Overlay" : "Show Overlay", #selector(toggleOverlay)))
-        let lock = action("Lock Overlay (Click-Through)", #selector(toggleLock))
-        lock.state = s.overlay.clickThrough ? .on : .off
+        let lock = action("Lock Caption Position", #selector(toggleLock))
+        lock.state = s.overlay.lockPosition ? .on : .off
         menu.addItem(lock)
         menu.addItem(action("Clear Captions", #selector(clearCaptions)))
         menu.addItem(action("Show Sample Captions", #selector(showSample)))

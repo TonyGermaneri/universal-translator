@@ -138,29 +138,29 @@ final class AppController: NSObject, NSApplicationDelegate {
     /// What the Dock icon's menu offers, so the essentials don't depend on finding the menu bar icon. (Clicking the
     /// icon opens Settings; macOS adds Quit.)
     enum DockAction: Equatable {
-        case startListening, stopListening, moveCaptions, lockCaptions, showCaptions, hideCaptions, showTranscript
+        case startListening, stopListening, showCaptions, hideCaptions, showSampleCaptions, showTranscript
 
         var title: String {
             switch self {
             case .startListening: return "Start Listening"
             case .stopListening: return "Stop Listening"
-            case .moveCaptions: return "Move Captions…"
-            case .lockCaptions: return "Lock Captions in Place"
             case .showCaptions: return "Show Captions"
             case .hideCaptions: return "Hide Captions"
+            case .showSampleCaptions: return "Show Sample Captions"
             case .showTranscript: return "Show Transcript"
             }
         }
     }
 
-    nonisolated static func dockActions(listening: Bool, locked: Bool, shown: Bool) -> [DockAction] {
-        [listening ? .stopListening : .startListening, locked ? .moveCaptions : .lockCaptions,
-         shown ? .hideCaptions : .showCaptions, .showTranscript]
+    /// Sample captions are there to be positioned: hovering over them shows the move grip.
+    nonisolated static func dockActions(listening: Bool, shown: Bool) -> [DockAction] {
+        [listening ? .stopListening : .startListening, shown ? .hideCaptions : .showCaptions, .showSampleCaptions,
+         .showTranscript]
     }
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        for action in Self.dockActions(listening: controller.isListening, locked: overlay.isLocked, shown: overlay.isShownByUser) {
+        for action in Self.dockActions(listening: controller.isListening, shown: overlay.isShownByUser) {
             menu.addItem(ClosureMenuItem(action.title) { [weak self] in self?.perform(action) })
         }
         return menu
@@ -169,9 +169,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func perform(_ action: DockAction) {
         switch action {
         case .startListening, .stopListening: controller.toggle()
-        // Unlocking shows the overlay, outlined, even with no captions, ready to drag.
-        case .moveCaptions, .lockCaptions: overlay.toggleLock()
         case .showCaptions, .hideCaptions: overlay.toggleShown()
+        case .showSampleCaptions: showSampleCaptions()
         case .showTranscript: openTranscript()
         }
     }

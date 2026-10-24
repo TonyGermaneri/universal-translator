@@ -44,11 +44,40 @@ import Testing
         }
     }
 
-    @Test func dockMenuOffersMoveWhileLockedAndLockWhileUnlocked() {
-        #expect(AppController.dockActions(listening: false, locked: true, shown: true)
-                == [.startListening, .moveCaptions, .hideCaptions, .showTranscript])
-        #expect(AppController.dockActions(listening: true, locked: false, shown: false)
-                == [.stopListening, .lockCaptions, .showCaptions, .showTranscript])
-        #expect(AppController.DockAction.moveCaptions.title == "Move Captions…")
+    @Test func dockMenuOffersSampleCaptionsToPositionInsteadOfAnUnlockMode() {
+        #expect(AppController.dockActions(listening: false, shown: true)
+                == [.startListening, .hideCaptions, .showSampleCaptions, .showTranscript])
+        #expect(AppController.dockActions(listening: true, shown: false)
+                == [.stopListening, .showCaptions, .showSampleCaptions, .showTranscript])
+    }
+
+    // MARK: The hover grip
+
+    @Test func theGripSitsCenteredOnTheCaptionsTopEdgeAndStaysOnTheDisplay() {
+        let size = GripPanel.size
+        let captions = NSRect(x: 200, y: 60, width: 1000, height: 120)
+        let grip = OverlayController.gripFrame(for: captions, size: size, in: builtIn)
+        #expect(grip.midX == captions.midX && grip.midY == captions.maxY)
+        // Captions against the top of the display: the grip comes down onto them instead of off the screen.
+        let atTop = NSRect(x: 0, y: builtIn.maxY - 100, width: builtIn.width, height: 100)
+        #expect(OverlayController.gripFrame(for: atTop, size: size, in: builtIn).maxY == builtIn.maxY)
+        // On the other display, it's on that display.
+        let elsewhere = NSRect(x: external.minX + 10, y: external.minY + 10, width: 600, height: 80)
+        #expect(external.contains(OverlayController.gripFrame(for: elsewhere, size: size, in: external)))
+    }
+
+    @Test func theGripShowsWhileHoveringOrDraggingAndNeverWhenLocked() {
+        func shows(locked: Bool = false, shown: Bool = true, dragging: Bool = false, over: Bool = false, since: Double? = nil) -> Bool {
+            OverlayController.showsGrip(locked: locked, captionsShown: shown, dragging: dragging, mouseOver: over,
+                                        secondsSinceOver: since)
+        }
+        #expect(shows(over: true))
+        #expect(shows(dragging: true))
+        #expect(shows(since: 0.3))                       // just left: still there to reach
+        #expect(!shows(since: OverlayController.gripLinger + 0.1))
+        #expect(!shows())                                // never hovered
+        #expect(!shows(locked: true, dragging: true, over: true))
+        #expect(!shows(shown: false, over: true))        // no captions on screen
+        #expect(AppSettings.defaults.overlay.lockPosition == false)
     }
 }

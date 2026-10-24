@@ -126,14 +126,11 @@ struct LayoutSettings: View {
             #if os(macOS)
             Section {
                 HStack {
-                    Button(store.settings.overlay.clickThrough ? "Unlock to drag & resize" : "Lock in place") {
-                        app.overlay.toggleLock()
-                    }
                     Button("Preview") { app.showSampleCaptions() }
                     Spacer()
                     Button("Reset overlay", role: .destructive) { store.resetOverlay() }
                 }
-                Note("When unlocked, drag the overlay anywhere, onto another display too, and use the ↔ handle to change its width (a full-width ticker moves only up and down until it's narrower). Lock it again so clicks pass through to the apps underneath. The Dock icon's menu has Move Captions and Lock Captions in Place too, as does \(store.settings.hotkeys.toggleLock.display).")
+                Note("To move the captions, hover over them and drag the grip that appears above them, onto another display too; its ↔ end changes their width (a full-width ticker moves only up and down until it's narrower). The captions themselves never catch clicks. Preview (or Show Sample Captions in the Dock icon's menu) puts captions on screen to move.")
             }
             #else
             Section {
@@ -219,7 +216,7 @@ struct LayoutSettings: View {
                 Picker("Stay on top of", selection: $store.settings.overlay.level) {
                     ForEach(OverlayLevel.allCases) { Text($0.title).tag($0) }
                 }
-                Toggle("Click-through (locked)", isOn: $store.settings.overlay.clickThrough)
+                Toggle("Lock position (no move grip on hover)", isOn: $store.settings.overlay.lockPosition)
                 Toggle("Show on all Spaces", isOn: $store.settings.overlay.allSpaces)
                 Toggle("Hide from screen recording and screen sharing", isOn: $store.settings.overlay.hideFromScreenCapture)
                 Toggle("Hide automatically when idle", isOn: $store.settings.overlay.autoHide)

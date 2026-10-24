@@ -6,6 +6,8 @@ checks behind the macOS 15 port and the Dock icon.
   first_run_gate   macOS 15, no models: listening refuses and names the downloads (no Apple fallback)
   dock             in the Dock by default; with "menu bar only", only while Settings or the transcript is open
   overlay_display  a position saved on a display (as a drag saves it) puts the captions there, on each display
+  overlay_grip     hovering over the captions shows the move grip; it leaves with the pointer; none when locked
+                   (moves the mouse pointer, and puts it back)
   model_import     hand-downloaded models (copies of the real ones) are checked and installed; a corrupt one isn't
   engine_llamacpp  Nemotron + Silero VAD + Smart Turn + Hy-MT2 1.8B (llama.cpp), scripts/evaluate.py's passages
   engine_mlx       the same with Hy-MT2 1.8B on MLX
@@ -207,20 +209,21 @@ def test_overlay_display(work, args):
     screens = geometry()["screens"]
     placed = []
     for screen in screens[:2]:
-        # Unlocked, so the overlay shows (outlined) without captions.
-        settings(overlay={"anchor": "custom", "customX": 0.5, "customY": 0.5, "screenMode": "specific",
-                          "screenName": screen["name"], "clickThrough": False})
+        # First run shows sample captions to measure (and opens Settings, a layer-0 window).
+        settings(hasCompletedFirstRun=False,
+                 overlay={"anchor": "custom", "customX": 0.5, "customY": 0.5, "screenMode": "specific",
+                          "screenName": screen["name"]})
         launch({})
         time.sleep(3)
         pid = subprocess.run(["pgrep", "-nx", "UniversalTranslator"], capture_output=True, text=True).stdout.strip()
         windows = geometry(pid)["windows"]
         quit_app()
-        # The overlay panel, at whatever level the settings give it; the menu bar icon's windows are layer 25.
-        panel = [w for w in windows if w["onscreen"] and w["layer"] != 25 and w["w"] > 100]
+        # The overlay panel, at whatever level the settings give it; Settings is layer 0, the menu bar icon 25.
+        panel = [w for w in windows if w["onscreen"] and w["layer"] not in (0, 25) and w["w"] > 100]
         assert panel, f"no overlay on screen for {screen['name']}: {windows}"
         w = max(panel, key=lambda w: w["w"])
         cx = w["x"] + w["w"] / 2
-        slack = 24  # the unlocked overlay's dashed outline reaches past the caption area
+        slack = 24
         assert screen["x"] - slack <= w["x"] and w["x"] + w["w"] <= screen["x"] + screen["w"] + slack \
             and screen["y"] - slack <= w["y"] and w["y"] + w["h"] <= screen["y"] + screen["h"] + slack, \
             f"overlay {w} isn't on {screen['name']} {screen}"
@@ -229,6 +232,58 @@ def test_overlay_display(work, args):
         placed.append(f"{screen['name']} (at {w['x']:.0f},{w['y']:.0f})")
     detail = "placed on " + " and ".join(placed)
     return detail + ("" if len(screens) > 1 else " (only one display attached: the second-display case didn't run)")
+
+
+def mouse(x=None, y=None):
+    """Where the pointer is (and moves it to x, y first if given), in the same coordinates as geometry()."""
+    cmd = ["swift", os.path.join(ROOT, "Tests", "tier3", "mouse.swift")] + ([str(x), str(y)] if x is not None else [])
+    return [float(v) for v in subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.split()]
+
+
+def test_overlay_grip(work, args):
+    """Hovering over the captions shows the move grip on their top edge; it goes when the pointer leaves, and never
+    shows with the position locked. (Moves the mouse pointer, and puts it back.)"""
+    def windows_with(**fields):
+        # First run shows sample captions (and opens Settings, a layer-0 window).
+        settings(hasCompletedFirstRun=False, overlay=fields)
+        launch({})
+        time.sleep(3)
+        pid = subprocess.run(["pgrep", "-nx", "UniversalTranslator"], capture_output=True, text=True).stdout.strip()
+        return pid
+    def overlay_and_grip(pid):
+        wins = [w for w in geometry(pid)["windows"] if w["onscreen"] and w["layer"] not in (0, 25)]
+        captions = max(wins, key=lambda w: w["w"], default=None)
+        grips = [w for w in wins if abs(w["w"] - 92) < 3 and abs(w["h"] - 26) < 3]
+        return captions, (grips[0] if grips else None)
+    home = mouse()
+    try:
+        pid = windows_with()
+        captions, _ = overlay_and_grip(pid)
+        assert captions, "no sample captions on screen"
+        mouse(captions["x"] + captions["w"] / 2, captions["y"] + captions["h"] / 2)
+        time.sleep(0.8)
+        _, grip = overlay_and_grip(pid)
+        assert grip, "hovering over the captions didn't show the grip"
+        assert abs((grip["x"] + grip["w"] / 2) - (captions["x"] + captions["w"] / 2)) <= 4, f"grip {grip} not centered on {captions}"
+        assert abs((grip["y"] + grip["h"] / 2) - captions["y"]) <= 4 or grip["y"] >= captions["y"], \
+            f"grip {grip} isn't on the captions' top edge {captions}"
+        mouse(captions["x"] + 5, max(0, captions["y"] - 300))   # well away from both
+        time.sleep(1.5)
+        _, grip = overlay_and_grip(pid)
+        assert not grip, "the grip stayed after the pointer left"
+        quit_app()
+
+        pid = windows_with(lockPosition=True)
+        captions, _ = overlay_and_grip(pid)
+        assert captions, "no sample captions on screen (locked run)"
+        mouse(captions["x"] + captions["w"] / 2, captions["y"] + captions["h"] / 2)
+        time.sleep(0.8)
+        _, grip = overlay_and_grip(pid)
+        assert not grip, "the grip showed with the position locked"
+    finally:
+        quit_app()
+        mouse(*home)
+    return "grip on hover, gone after leaving, none when locked"
 
 
 def engine(engine_name, work, args):
@@ -321,7 +376,7 @@ def test_mic(work, args):
 
 
 TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
-         ("model_import", test_model_import),
+         ("overlay_grip", test_overlay_grip), ("model_import", test_model_import),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
 

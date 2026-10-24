@@ -11,7 +11,6 @@ import UIKit
 @Observable
 final class OverlayLayout {
     var width: CGFloat = 900
-    var isUnlocked = false
 }
 
 struct OverlayRootView: View {
@@ -19,17 +18,13 @@ struct OverlayRootView: View {
     let captions: CaptionStore
     let layout: OverlayLayout
     var onHeightChange: (CGFloat) -> Void
-    var onDrag: (DragPhase) -> Void
-    var onResize: (DragPhase) -> Void
-
-    enum DragPhase { case changed, ended }
 
     private var o: OverlaySettings { settings.settings.overlay }
 
     var body: some View {
         VStack(alignment: o.alignment.horizontal, spacing: 0) {
             if showsContent {
-                CaptionBox(o: o, captions: captions, privacy: PrivacyStatus.of(settings.settings), isUnlocked: layout.isUnlocked,
+                CaptionBox(o: o, captions: captions, privacy: PrivacyStatus.of(settings.settings), isUnlocked: false,
                            textWidth: layout.width - (o.backgroundStyle == .box ? 2 * o.paddingH : 0),
                            direction: .init(source: settings.settings.sourceLocale, target: settings.settings.targetLanguage))
                     .frame(maxWidth: o.backgroundStyle == .box && !fixedWidth ? nil : .infinity, alignment: o.alignment.frame)
@@ -37,8 +32,6 @@ struct OverlayRootView: View {
         }
         .frame(width: layout.width, alignment: o.alignment.frame)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(layout.isUnlocked ? 6 : 0)
-        .overlay { if layout.isUnlocked { unlockedChrome } }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeightChange($0) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: o.anchor.isTop ? .top : .bottom)
         .opacity(o.opacity)
@@ -47,40 +40,7 @@ struct OverlayRootView: View {
     private var fixedWidth: Bool { o.fixedWidthBox }
 
     private var showsContent: Bool {
-        captions.hasVisibleText || captions.status != .idle || layout.isUnlocked
-    }
-
-    private var unlockedChrome: some View {
-        ZStack(alignment: .bottomTrailing) {
-            RoundedRectangle(cornerRadius: max(o.cornerRadius, 8) + 4)
-                .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
-                .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: max(o.cornerRadius, 8) + 4))
-                .contentShape(Rectangle())
-                .gesture(windowDrag(onDrag))
-            Image(systemName: "arrow.left.and.right")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(6)
-                .background(Circle().fill(Color.accentColor))
-                .padding(4)
-                .gesture(windowDrag(onResize))
-                .help("Drag to change the overlay width")
-        }
-        .overlay(alignment: .top) {
-            Text("Drag anywhere, onto another display too · ↔ width · lock: Dock menu or \(settings.settings.hotkeys.toggleLock.display)")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Capsule().fill(Color.accentColor))
-                .offset(y: -10)
-                .allowsHitTesting(false)
-        }
-    }
-
-    private func windowDrag(_ handler: @escaping (DragPhase) -> Void) -> some Gesture {
-        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-            .onChanged { _ in handler(.changed) }
-            .onEnded { _ in handler(.ended) }
+        captions.hasVisibleText || captions.status != .idle
     }
 }
 
