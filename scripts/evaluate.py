@@ -80,11 +80,17 @@ def run_passage(name, text, args, workdir):
     env = dict(os.environ, UT_DEFAULTS_SUITE=SUITE, UT_AUDIO_FILE=audio, UT_DEBUG_LOG=log, UT_AUTOSTART="1")
     proc = subprocess.Popen([APP], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(duration + args.tail)
+    # The app stopped logging well before the end (seen with llama.cpp, no crash): record what it's doing.
+    sample = os.path.join(workdir, f"{name}.sample.txt")
+    if os.path.exists(log) and time.time() - os.path.getmtime(log) > 10 and proc.poll() is None:
+        subprocess.run(["sample", str(proc.pid), "3", "-file", sample], capture_output=True)
     proc.terminate()
     proc.wait(timeout=10)
     if args.keep_logs and os.path.exists(log):
         os.makedirs(args.keep_logs, exist_ok=True)
         subprocess.run(["cp", log, os.path.join(args.keep_logs, f"{name}.log")])
+        if os.path.exists(sample):
+            subprocess.run(["cp", sample, os.path.join(args.keep_logs, f"{name}.sample.txt")])
     r = parse(open(log, encoding="utf-8").read() if os.path.exists(log) else "")
     r["wer"] = wer(text, " ".join(x.get("source", "") for x in r["sentences"]))
     return r

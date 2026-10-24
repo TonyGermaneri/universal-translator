@@ -332,7 +332,15 @@ def engine(engine_name, work, args):
         r = evaluate.parse(log)
         assert r["sentences"], f"{p}: no sentence finished"
         stall = stalled_at(evaluate.PASSAGES[p], log)
-        assert stall is None, f"{p}: the app stopped before the end of the passage (last log line at {stall:.1f} s)"
+        if stall is not None:
+            # evaluate.py sampled the stuck app; keep the sample and the log past the run's temporary folder.
+            kept = os.path.join(ROOT, ".build", f"stall-{engine_name}-{p}-{time.strftime('%Y%m%d-%H%M%S')}")
+            os.makedirs(kept, exist_ok=True)
+            for f in (f"{p}.log", f"{p}.sample.txt"):
+                if os.path.exists(os.path.join(logs, f)):
+                    shutil.copy(os.path.join(logs, f), kept)
+        assert stall is None, f"{p}: the app stopped before the end of the passage (last log line at {stall:.1f} s); " \
+                              f"log and process sample in {kept}"
         for s in r["sentences"]:
             assert not s["replacedCommitted"], f"{p}: a final caption was replaced: {s['source']}"
             assert s["committedErasure"] == 0, f"{p}: text shown as final changed: {s['source']}"
