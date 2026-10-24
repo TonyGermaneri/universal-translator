@@ -56,18 +56,32 @@ struct CaptionBox: View {
     let direction: TextDirections
     @State private var marquee = MarqueeState()
 
-    /// Which way each language reads, so the marquee scrolls toward where its text starts.
+    /// Each line's language: which way it reads, so the marquee scrolls toward where its text starts, and which
+    /// reading aid it gets.
     struct TextDirections {
         var sourceRightToLeft = false
         var targetRightToLeft = false
+        var source = ""
+        var target = ""
 
         init(source: String, target: String) {
+            self.source = source
+            self.target = target
             sourceRightToLeft = Locale.Language(identifier: source).characterDirection == .rightToLeft
             targetRightToLeft = Locale.Language(identifier: target).characterDirection == .rightToLeft
         }
     }
 
     private var reduceMotion: Bool { Platform.reduceMotion }
+
+    /// The reading aid on for each line's language. Drawn by Core Text, so on the Mac only.
+    private func aid(_ lane: MarqueeState.Lane) -> ReadingAid? {
+        #if os(macOS)
+        return o.readingAid(for: lane == .translation ? direction.target : direction.source)
+        #else
+        return nil
+        #endif
+    }
     /// A scrolling ticker would ignore Reduce Motion, so captions roll instead.
     private var isMarquee: Bool { o.layout == .marquee && !reduceMotion }
 
@@ -190,7 +204,11 @@ struct CaptionBox: View {
                 .font: nsFont(scale: 1, italic: italic), .paragraphStyle: paragraphStyle,
             ]))
         }
+        #if os(macOS)
+        let lines = CaptionFitter.lines(aid(.translation).map { Ruby.annotated(measured, aid: $0) } ?? measured, width: textWidth)
+        #else
         let lines = CaptionFitter.lines(measured, width: textWidth)
+        #endif
         guard lines.count > maxLines else { return runs }
         // The reading-speed limit may keep a line that hasn't been on screen long enough.
         captions.governor.charactersPerSecond = o.readingSpeed
@@ -239,10 +257,53 @@ struct CaptionBox: View {
         return out
     }
 
-    private func mix(_ a: RGBA, _ b: RGBA, _ t: Double) -> Color {
+    private func mix(_ a: RGBA, _ b: RGBA, _ t: Double) -> Color { mixed(a, b, t).color }
+
+    private func mixed(_ a: RGBA, _ b: RGBA, _ t: Double) -> RGBA {
         let t = min(max(t, 0), 1)
-        return RGBA(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t).color
+        return RGBA(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t)
     }
+
+    #if os(macOS)
+    /// `attributed(_:override:)` for Core Text, with the reading aid's readings attached.
+    private func rubyAttributed(_ runs: [Run], override: NSColor?, aid: ReadingAid) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        let text = o.textColor
+        for run in runs {
+            var italic = false
+            let color: NSColor
+            switch run.kind {
+            case .committed:
+                color = override ?? text.nsColor
+            case .fresh(let t):
+                color = override ?? text.nsColor.withAlphaComponent(text.a * (o.provisionalOpacity + (1 - o.provisionalOpacity) * t))
+            case .revised(let glow):
+                color = override ?? mixed(text, o.revisionColor, glow).nsColor
+            case .ghost:
+                color = override ?? text.nsColor.withAlphaComponent(text.a * o.provisionalOpacity)
+                italic = o.provisionalItalic
+            }
+            out.append(rubyRun(run.text, font: nsFont(scale: 1, italic: italic), color: color))
+        }
+        return Ruby.annotated(out, aid: aid)
+    }
+
+    /// The original speech for Core Text, with the reading aid's readings attached.
+    private func rubySource(_ text: String, override: NSColor?, aid: ReadingAid) -> NSAttributedString {
+        Ruby.annotated(rubyRun(text, font: nsFont(scale: o.sourceScale, weight: .regular), color: override ?? o.sourceColor.nsColor),
+                       aid: aid)
+    }
+
+    private func rubyRun(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = o.lineSpacing
+        style.alignment = o.alignment == .leading ? .left : o.alignment == .trailing ? .right : .center
+        return NSAttributedString(string: text, attributes: [
+            .font: font, .foregroundColor: color, NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.cgColor,
+            .paragraphStyle: style,
+        ])
+    }
+    #endif
 
     // MARK: Translation
 
@@ -273,10 +334,22 @@ struct CaptionBox: View {
             stackedLines(now: now)
         } else {
             let visible = fitted(runs(now: now), maxLines: o.maxLines)
+            #if os(macOS)
+            if let aid = aid(.translation) {
+                styledRuby { color in rubyAttributed(visible, override: color, aid: aid) }
+                    .transaction { $0.animation = nil }
+            } else {
+                styled { color in Text(attributed(visible, override: color)) }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .font(font(scale: 1))
+                    .transaction { $0.animation = nil }
+            }
+            #else
             styled { color in Text(attributed(visible, override: color)) }
                 .fixedSize(horizontal: false, vertical: true)
                 .font(font(scale: 1))
                 .transaction { $0.animation = nil }
+            #endif
         }
     }
 
@@ -285,15 +358,24 @@ struct CaptionBox: View {
         VStack(alignment: o.alignment.horizontal, spacing: o.lineSpacing + 2) {
             ForEach(Array(lines.enumerated()), id: \.element.id) { index, sentence in
                 let isLatest = index == lines.count - 1
-                styled { color in
-                    Text(attributed(sentenceRuns(sentence, now: now), override: color))
-                }
-                .font(font(scale: 1))
-                .opacity(isLatest ? 1 : o.olderLineOpacity)
-                .transition(lineTransition)
+                stackedLine(sentenceRuns(sentence, now: now))
+                    .opacity(isLatest ? 1 : o.olderLineOpacity)
+                    .transition(lineTransition)
             }
         }
         .animation(o.textAnimation == .none ? nil : .easeOut(duration: o.animationDuration), value: lines.map(\.id))
+    }
+
+    @ViewBuilder private func stackedLine(_ runs: [Run]) -> some View {
+        #if os(macOS)
+        if let aid = aid(.translation) {
+            styledRuby { color in rubyAttributed(runs, override: color, aid: aid) }
+        } else {
+            styled { color in Text(attributed(runs, override: color)) }.font(font(scale: 1))
+        }
+        #else
+        styled { color in Text(attributed(runs, override: color)) }.font(font(scale: 1))
+        #endif
     }
 
     private var lineTransition: AnyTransition {
@@ -319,14 +401,32 @@ struct CaptionBox: View {
         }
     }
 
-    private var rolledSource: some View {
+    @ViewBuilder private var rolledSource: some View {
         let text = CaptionFitter.recentTail(sourceLine)
-        let attributed = NSAttributedString(string: text, attributes: [
+        let plain = NSAttributedString(string: text, attributes: [
             .font: nsFont(scale: o.sourceScale, weight: .regular), .paragraphStyle: paragraphStyle,
         ])
+        #if os(macOS)
+        let attributed = aid(.source).map { Ruby.annotated(plain, aid: $0) } ?? plain
+        #else
+        let attributed = plain
+        #endif
         let start = CaptionFitter.tailStart(attributed, width: textWidth, maxLines: o.sourceMaxLines)
         let visible = start > 0 ? (String(text.utf16.dropFirst(start)) ?? text) : text
-        return styled { color in
+        #if os(macOS)
+        if let aid = aid(.source) {
+            styledRuby { color in rubySource(visible, override: color, aid: aid) }
+                .transaction { $0.animation = nil }
+        } else {
+            plainSource(visible)
+        }
+        #else
+        plainSource(visible)
+        #endif
+    }
+
+    private func plainSource(_ visible: String) -> some View {
+        styled { color in
             Text(visible).foregroundColor(color ?? o.sourceColor.color)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -349,7 +449,8 @@ struct CaptionBox: View {
             m.reset()
             m.clearCount = captions.clearCount
         }
-        let fontKey = "\(o.fontFamily)|\(o.fontSize)|\(o.fontWeight)|\(o.provisionalItalic)|\(o.sourceScale)|\(o.showProvisional)"
+        let aids = [aid(.translation), aid(.source)].map { $0?.rawValue ?? "-" }.joined(separator: ",")
+        let fontKey = "\(o.fontFamily)|\(o.fontSize)|\(o.fontWeight)|\(o.provisionalItalic)|\(o.sourceScale)|\(o.showProvisional)|\(aids)"
         if m.fontKey != fontKey {
             m.widths = [:]
             m.fontKey = fontKey
@@ -378,7 +479,7 @@ struct CaptionBox: View {
                 let runs = marqueeRuns(sentence, now: .distantFuture)
                 if !runs.isEmpty {
                     let key = runs.map { run in run.text + (isGhost(run) ? "\u{1}" : "") }.joined()
-                    translations.append((sentence.id, m.width(.translation, sentence.id, key: key) { measure(runs, scale: 1) }))
+                    translations.append((sentence.id, m.width(.translation, sentence.id, key: key) { measure(runs, lane: .translation) }))
                 }
             }
             if m.source.hasScrolledAway(sentence.id) {
@@ -386,7 +487,7 @@ struct CaptionBox: View {
             } else if o.showSource, !sentence.source.isEmpty {
                 m.sentences[sentence.id] = sentence
                 sources.append((sentence.id, m.width(.source, sentence.id, key: sentence.source) {
-                    measure([Run(text: sentence.source, kind: .committed)], scale: o.sourceScale, weight: .regular)
+                    measure([Run(text: sentence.source, kind: .committed)], lane: .source)
                 }))
             }
         }
@@ -396,7 +497,7 @@ struct CaptionBox: View {
             if !m.liveSource.isEmpty {
                 let text = m.liveSource
                 sources.append((MarqueeState.liveID, m.width(.source, MarqueeState.liveID, key: text) {
-                    measure([Run(text: text, kind: .committed)], scale: o.sourceScale, weight: .regular)
+                    measure([Run(text: text, kind: .committed)], lane: .source)
                 }))
             }
             m.source.update(sources, viewport: viewport, transient: MarqueeState.liveID)
@@ -416,6 +517,18 @@ struct CaptionBox: View {
     private func isGhost(_ run: Run) -> Bool {
         if case .ghost = run.kind { return true }
         return false
+    }
+
+    /// Natural single-line width of a lane's styled runs, readings included.
+    private func measure(_ runs: [Run], lane: MarqueeState.Lane) -> Double {
+        #if os(macOS)
+        if let aid = aid(lane) {
+            return Ruby.lineWidth(of: lane == .translation
+                ? rubyAttributed(runs, override: nil, aid: aid)
+                : rubySource(runs.map(\.text).joined(), override: nil, aid: aid))
+        }
+        #endif
+        return lane == .translation ? measure(runs, scale: 1) : measure(runs, scale: o.sourceScale, weight: .regular)
     }
 
     /// Natural single-line width of styled runs.
@@ -440,6 +553,7 @@ struct CaptionBox: View {
         return Text(verbatim: "Ag")
             .font(font(scale: scale))
             .hidden()
+            .padding(.bottom, rubyHeight(lane))
             .frame(width: marqueeWidth)
             .overlay(alignment: .leading) {
                 TimelineView(.animation(paused: marquee.tape(lane).isEmpty)) { context in
@@ -458,6 +572,16 @@ struct CaptionBox: View {
             .mask { edgeFade }
             .padding(.vertical, -bleed)
             .transaction { $0.animation = nil }
+    }
+
+    /// Extra height under a marquee line for its readings.
+    private func rubyHeight(_ lane: MarqueeState.Lane) -> CGFloat {
+        #if os(macOS)
+        guard aid(lane) != nil else { return 0 }
+        return Ruby.extraHeight(font: lane == .translation ? nsFont(scale: 1) : nsFont(scale: o.sourceScale, weight: .regular))
+        #else
+        return 0
+        #endif
     }
 
     /// Moves a tape on to `now` and tells the overlay how long text will still be crossing the screen.
@@ -514,6 +638,23 @@ struct CaptionBox: View {
         }
 
         @ViewBuilder private func segment(_ i: Int) -> some View {
+            #if os(macOS)
+            if let aid = box.aid(lane) {
+                if lane == .translation {
+                    let runs = sentences[i].map { box.marqueeRuns($0, now: effectsAt ?? .distantFuture) } ?? []
+                    box.styledRuby { color in box.rubyAttributed(runs, override: color, aid: aid) }
+                } else {
+                    box.styledRuby { color in box.rubySource(texts[i], override: color, aid: aid) }
+                }
+            } else {
+                plainSegment(i)
+            }
+            #else
+            plainSegment(i)
+            #endif
+        }
+
+        @ViewBuilder private func plainSegment(_ i: Int) -> some View {
             let o = box.o
             if lane == .translation {
                 let runs = sentences[i].map { box.marqueeRuns($0, now: effectsAt ?? .distantFuture) } ?? []
@@ -560,6 +701,15 @@ struct CaptionBox: View {
             .compositingGroup()
             .shadow(color: o.shadowEnabled ? o.shadowColor.color : .clear, radius: o.shadowEnabled ? o.shadowRadius : 0, x: 0, y: 1)
     }
+
+    #if os(macOS)
+    /// `styled(_:)` for text with readings, drawn by Core Text.
+    private func styledRuby(_ make: @escaping (NSColor?) -> NSAttributedString) -> some View {
+        OutlinedRubyText(make: make, strokeWidth: o.strokeWidth, strokeColor: o.strokeColor.nsColor)
+            .compositingGroup()
+            .shadow(color: o.shadowEnabled ? o.shadowColor.color : .clear, radius: o.shadowEnabled ? o.shadowRadius : 0, x: 0, y: 1)
+    }
+    #endif
 
     @ViewBuilder private var background: some View {
         if o.backgroundStyle == .box {
@@ -621,6 +771,7 @@ struct OutlinedText: View {
     var body: some View {
         ZStack {
             if strokeWidth > 0 {
+                let offsets = Self.offsets(strokeWidth: strokeWidth)
                 ForEach(offsets.indices, id: \.self) { i in
                     make(strokeColor).lineSpacing(lineSpacing).offset(x: offsets[i].width, y: offsets[i].height)
                 }
@@ -629,7 +780,8 @@ struct OutlinedText: View {
         }
     }
 
-    private var offsets: [CGSize] {
+    /// Where the outline copies go around the text.
+    static func offsets(strokeWidth: Double) -> [CGSize] {
         let steps = strokeWidth > 2 ? 16 : 8
         return (0..<steps).map { i in
             let angle = Double(i) / Double(steps) * 2 * .pi

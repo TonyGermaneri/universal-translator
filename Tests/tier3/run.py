@@ -286,6 +286,34 @@ def test_overlay_grip(work, args):
     return "grip on hover, gone after leaving, none when locked"
 
 
+def test_reading_aid(work, args):
+    """Furigana: the Japanese sample captions get readings under the kanji, on the translation line and on the
+    original-speech line, in the rolling and marquee layouts; the lines get taller by about the readings' size."""
+    def panel_height(log, **fields):
+        # First run shows sample captions (and opens Settings, a layer-0 window).
+        settings(hasCompletedFirstRun=False, **fields)
+        launch({"UT_DEBUG_LOG": log})
+        time.sleep(3)
+        pid = subprocess.run(["pgrep", "-nx", "UniversalTranslator"], capture_output=True, text=True).stdout.strip()
+        wins = [w for w in geometry(pid)["windows"] if w["onscreen"] and w["layer"] not in (0, 25) and w["w"] > 100]
+        quit_app()
+        assert wins, f"no sample captions on screen: {fields}"
+        return max(wins, key=lambda w: w["w"])["h"]
+    font = 34   # the default caption size; the original speech is 55 % of it
+    results = []
+    for layout in ("rolling", "marquee"):
+        for line, langs, size in (("translation", {"targetLanguage": "ja", "sourceLocale": "en-US"}, font),
+                                  ("original speech", {"targetLanguage": "en", "sourceLocale": "ja-JP"}, font * 0.55)):
+            log = os.path.join(work, f"reading-{layout}-{line.replace(' ', '-')}.log")
+            off = panel_height(log + ".off", overlay={"layout": layout}, **langs)
+            on = panel_height(log, overlay={"layout": layout, "readingAids": {"ja": "furigana"}}, **langs)
+            text = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+            assert "本日(ほんじつ)はご参加(さんか)" in text, f"{layout}, {line}: no readings worked out: {text.strip()[:300]}"
+            assert on - off >= 0.35 * size, f"{layout}, {line}: captions {off:.0f} pt tall without readings, {on:.0f} with"
+            results.append(f"{layout} {line} +{on - off:.0f} pt")
+    return "readings under the kanji: " + ", ".join(results)
+
+
 def engine(engine_name, work, args):
     require_models(*NEEDED.items(), LIVE[engine_name])
     logs = os.path.join(work, engine_name)
@@ -376,7 +404,7 @@ def test_mic(work, args):
 
 
 TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
-         ("overlay_grip", test_overlay_grip), ("model_import", test_model_import),
+         ("overlay_grip", test_overlay_grip), ("reading_aid", test_reading_aid), ("model_import", test_model_import),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
 

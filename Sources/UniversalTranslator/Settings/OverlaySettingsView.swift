@@ -38,6 +38,10 @@ struct AppearanceSettings: View {
                 .pickerStyle(.segmented)
             }
 
+            #if os(macOS)
+            ReadingAidSection(store: store)
+            #endif
+
             Section("Outline & shadow") {
                 SliderRow(title: "Outline width", value: $store.settings.overlay.strokeWidth, range: 0...6, step: 0.5,
                           format: { $0 == 0 ? "Off" : String(format: "%.1f pt", $0) })

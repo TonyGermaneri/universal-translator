@@ -78,7 +78,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     func showSampleCaptions() {
-        captions.showDemo(targetLanguage: settings.settings.targetLanguage)
+        captions.showDemo(targetLanguage: settings.settings.targetLanguage, sourceLanguage: settings.settings.sourceLocale)
         overlay.setShown(true)
     }
 

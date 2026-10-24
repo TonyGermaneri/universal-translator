@@ -136,6 +136,9 @@ struct RGBA: Codable, Equatable {
     }
 
     var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
+    #if os(macOS)
+    var nsColor: NSColor { NSColor(srgbRed: r, green: g, blue: b, alpha: a) }
+    #endif
 
     static let white = RGBA(1, 1, 1)
     static let black = RGBA(0, 0, 0)
@@ -317,6 +320,9 @@ struct OverlaySettings: Codable, Equatable {
     /// two). It speeds up while words are waiting to come on screen.
     var marqueeSpeed: Double = 10
     var alignment: AlignmentChoice = .center
+    /// Reading aid by base language ("ja": "furigana"), for every caption line in that language: the translation
+    /// and the original speech. Stored as raw values so a name this build doesn't know is ignored, not a reset.
+    var readingAids: [String: String] = [:]
 
     // Typography
     var fontFamily: String = ""
@@ -366,6 +372,12 @@ struct OverlaySettings: Codable, Equatable {
     var showStatusIndicator: Bool = true
     /// A lock (everything stays on this Mac) or network symbol (text is sent elsewhere) beside the status dot.
     var showPrivacyIndicator: Bool = true
+
+    /// The reading aid turned on for caption text in `language` (any BCP-47 identifier), if any.
+    func readingAid(for language: String) -> ReadingAid? {
+        let code = ReadingAid.baseLanguage(language)
+        return readingAids[code].flatMap(ReadingAid.init(rawValue:)).flatMap { $0.language == code ? $0 : nil }
+    }
 }
 
 struct TranslationSettings: Codable, Equatable {

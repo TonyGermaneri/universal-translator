@@ -316,10 +316,10 @@ final class CaptionStore {
 
     // MARK: Demo
 
-    func showDemo(targetLanguage: String) {
+    func showDemo(targetLanguage: String, sourceLanguage: String = "en") {
         resetSession()
         isDemo = true
-        let samples = DemoText.sample(for: targetLanguage)
+        let samples = DemoText.sample(for: targetLanguage, from: sourceLanguage)
         var first = Sentence(source: samples.source1, startedAt: Date())
         first.committed = samples.target1
         first.isFinished = true
@@ -334,7 +334,18 @@ final class CaptionStore {
 enum DemoText {
     struct Sample { var source1, target1, source2, target2Committed, target2Ghost: String }
 
-    static func sample(for language: String) -> Sample {
+    /// Sample captions in `language`; the original speech is English, or Japanese when that's the speech
+    /// language (so its reading aid shows too).
+    static func sample(for language: String, from source: String = "en") -> Sample {
+        var sample = translated(language)
+        if source.hasPrefix("ja"), !language.hasPrefix("ja") {
+            sample.source1 = "本日はご参加いただきありがとうございます。"
+            sample.source2 = "まずは簡単に"
+        }
+        return sample
+    }
+
+    private static func translated(_ language: String) -> Sample {
         let s1 = "Thanks everyone for joining today."
         let s2 = "Let's start with a quick look at the"
         switch String(language.prefix(2)) {
