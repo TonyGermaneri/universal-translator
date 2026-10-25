@@ -320,8 +320,8 @@ struct OverlaySettings: Codable, Equatable {
     /// two). It speeds up while words are waiting to come on screen.
     var marqueeSpeed: Double = 10
     var alignment: AlignmentChoice = .center
-    /// Reading aid by base language ("ja": "furigana"), for every caption line in that language: the translation
-    /// and the original speech. Stored as raw values so a name this build doesn't know is ignored, not a reset.
+    /// Reading aids by base language ("ja": "furigana", "zh": "pinyin,traditional"), for every caption line in that
+    /// language: the translation    /// and the original speech. Stored as raw values so a name this build doesn't know is ignored, not a reset.
     var readingAids: [String: String] = [:]
 
     // Typography
@@ -373,10 +373,9 @@ struct OverlaySettings: Codable, Equatable {
     /// A lock (everything stays on this Mac) or network symbol (text is sent elsewhere) beside the status dot.
     var showPrivacyIndicator: Bool = true
 
-    /// The reading aid turned on for caption text in `language` (any BCP-47 identifier), if any.
-    func readingAid(for language: String) -> ReadingAid? {
-        let code = ReadingAid.baseLanguage(language)
-        return readingAids[code].flatMap(ReadingAid.init(rawValue:)).flatMap { $0.language == code ? $0 : nil }
+    /// The reading aids turned on for caption text in `language` (any BCP-47 identifier), at most one of each kind.
+    func readingAids(for language: String) -> [ReadingAid] {
+        ReadingAid.parse(readingAids[ReadingAid.baseLanguage(language)] ?? "", language: language)
     }
 }
 

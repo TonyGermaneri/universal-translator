@@ -74,10 +74,11 @@ struct CaptionBox: View {
 
     private var reduceMotion: Bool { Platform.reduceMotion }
 
-    /// The reading aid on for each line's language. Drawn by Core Text, so on the Mac only.
-    private func aid(_ lane: MarqueeState.Lane) -> ReadingAid? {
+    /// The reading aids on for each line's language (nil when none). Drawn by Core Text, so on the Mac only.
+    private func aids(_ lane: MarqueeState.Lane) -> [ReadingAid]? {
         #if os(macOS)
-        return o.readingAid(for: lane == .translation ? direction.target : direction.source)
+        let aids = o.readingAids(for: lane == .translation ? direction.target : direction.source)
+        return aids.isEmpty ? nil : aids
         #else
         return nil
         #endif
@@ -205,7 +206,7 @@ struct CaptionBox: View {
             ]))
         }
         #if os(macOS)
-        let lines = CaptionFitter.lines(aid(.translation).map { Ruby.annotated(measured, aid: $0) } ?? measured, width: textWidth)
+        let lines = CaptionFitter.lines(aids(.translation).map { Ruby.annotated(measured, aids: $0) } ?? measured, width: textWidth)
         #else
         let lines = CaptionFitter.lines(measured, width: textWidth)
         #endif
@@ -265,8 +266,8 @@ struct CaptionBox: View {
     }
 
     #if os(macOS)
-    /// `attributed(_:override:)` for Core Text, with the reading aid's readings attached.
-    private func rubyAttributed(_ runs: [Run], override: NSColor?, aid: ReadingAid) -> NSAttributedString {
+    /// `attributed(_:override:)` for Core Text, with the reading aids applied.
+    private func rubyAttributed(_ runs: [Run], override: NSColor?, aids: [ReadingAid]) -> NSAttributedString {
         let out = NSMutableAttributedString()
         let text = o.textColor
         for run in runs {
@@ -285,13 +286,13 @@ struct CaptionBox: View {
             }
             out.append(rubyRun(run.text, font: nsFont(scale: 1, italic: italic), color: color))
         }
-        return Ruby.annotated(out, aid: aid)
+        return Ruby.annotated(out, aids: aids)
     }
 
-    /// The original speech for Core Text, with the reading aid's readings attached.
-    private func rubySource(_ text: String, override: NSColor?, aid: ReadingAid) -> NSAttributedString {
+    /// The original speech for Core Text, with the reading aids applied.
+    private func rubySource(_ text: String, override: NSColor?, aids: [ReadingAid]) -> NSAttributedString {
         Ruby.annotated(rubyRun(text, font: nsFont(scale: o.sourceScale, weight: .regular), color: override ?? o.sourceColor.nsColor),
-                       aid: aid)
+                       aids: aids)
     }
 
     private func rubyRun(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
@@ -335,8 +336,8 @@ struct CaptionBox: View {
         } else {
             let visible = fitted(runs(now: now), maxLines: o.maxLines)
             #if os(macOS)
-            if let aid = aid(.translation) {
-                styledRuby { color in rubyAttributed(visible, override: color, aid: aid) }
+            if let aids = aids(.translation) {
+                styledRuby { color in rubyAttributed(visible, override: color, aids: aids) }
                     .transaction { $0.animation = nil }
             } else {
                 styled { color in Text(attributed(visible, override: color)) }
@@ -368,8 +369,8 @@ struct CaptionBox: View {
 
     @ViewBuilder private func stackedLine(_ runs: [Run]) -> some View {
         #if os(macOS)
-        if let aid = aid(.translation) {
-            styledRuby { color in rubyAttributed(runs, override: color, aid: aid) }
+        if let aids = aids(.translation) {
+            styledRuby { color in rubyAttributed(runs, override: color, aids: aids) }
         } else {
             styled { color in Text(attributed(runs, override: color)) }.font(font(scale: 1))
         }
@@ -407,15 +408,15 @@ struct CaptionBox: View {
             .font: nsFont(scale: o.sourceScale, weight: .regular), .paragraphStyle: paragraphStyle,
         ])
         #if os(macOS)
-        let attributed = aid(.source).map { Ruby.annotated(plain, aid: $0) } ?? plain
+        let attributed = aids(.source).map { Ruby.annotated(plain, aids: $0) } ?? plain
         #else
         let attributed = plain
         #endif
         let start = CaptionFitter.tailStart(attributed, width: textWidth, maxLines: o.sourceMaxLines)
         let visible = start > 0 ? (String(text.utf16.dropFirst(start)) ?? text) : text
         #if os(macOS)
-        if let aid = aid(.source) {
-            styledRuby { color in rubySource(visible, override: color, aid: aid) }
+        if let aids = aids(.source) {
+            styledRuby { color in rubySource(visible, override: color, aids: aids) }
                 .transaction { $0.animation = nil }
         } else {
             plainSource(visible)
@@ -449,7 +450,7 @@ struct CaptionBox: View {
             m.reset()
             m.clearCount = captions.clearCount
         }
-        let aids = [aid(.translation), aid(.source)].map { $0?.rawValue ?? "-" }.joined(separator: ",")
+        let aids = [aids(.translation), aids(.source)].map { $0.map(ReadingAid.stored) ?? "-" }.joined(separator: "|")
         let fontKey = "\(o.fontFamily)|\(o.fontSize)|\(o.fontWeight)|\(o.provisionalItalic)|\(o.sourceScale)|\(o.showProvisional)|\(aids)"
         if m.fontKey != fontKey {
             m.widths = [:]
@@ -522,10 +523,10 @@ struct CaptionBox: View {
     /// Natural single-line width of a lane's styled runs, readings included.
     private func measure(_ runs: [Run], lane: MarqueeState.Lane) -> Double {
         #if os(macOS)
-        if let aid = aid(lane) {
+        if let aids = aids(lane) {
             return Ruby.lineWidth(of: lane == .translation
-                ? rubyAttributed(runs, override: nil, aid: aid)
-                : rubySource(runs.map(\.text).joined(), override: nil, aid: aid))
+                ? rubyAttributed(runs, override: nil, aids: aids)
+                : rubySource(runs.map(\.text).joined(), override: nil, aids: aids))
         }
         #endif
         return lane == .translation ? measure(runs, scale: 1) : measure(runs, scale: o.sourceScale, weight: .regular)
@@ -577,7 +578,7 @@ struct CaptionBox: View {
     /// Extra height under a marquee line for its readings.
     private func rubyHeight(_ lane: MarqueeState.Lane) -> CGFloat {
         #if os(macOS)
-        guard aid(lane) != nil else { return 0 }
+        guard aids(lane)?.contains(where: { $0.kind == .readings }) == true else { return 0 }
         return Ruby.extraHeight(font: lane == .translation ? nsFont(scale: 1) : nsFont(scale: o.sourceScale, weight: .regular))
         #else
         return 0
@@ -639,12 +640,12 @@ struct CaptionBox: View {
 
         @ViewBuilder private func segment(_ i: Int) -> some View {
             #if os(macOS)
-            if let aid = box.aid(lane) {
+            if let aids = box.aids(lane) {
                 if lane == .translation {
                     let runs = sentences[i].map { box.marqueeRuns($0, now: effectsAt ?? .distantFuture) } ?? []
-                    box.styledRuby { color in box.rubyAttributed(runs, override: color, aid: aid) }
+                    box.styledRuby { color in box.rubyAttributed(runs, override: color, aids: aids) }
                 } else {
-                    box.styledRuby { color in box.rubySource(texts[i], override: color, aid: aid) }
+                    box.styledRuby { color in box.rubySource(texts[i], override: color, aids: aids) }
                 }
             } else {
                 plainSegment(i)

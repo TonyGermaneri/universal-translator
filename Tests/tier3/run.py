@@ -287,8 +287,9 @@ def test_overlay_grip(work, args):
 
 
 def test_reading_aid(work, args):
-    """Furigana: the Japanese sample captions get readings under the kanji, on the translation line and on the
-    original-speech line, in the rolling and marquee layouts; the lines get taller by about the readings' size."""
+    """Reading aids on the sample captions: furigana (Japanese) and pinyin (Chinese) under the characters, on the
+    translation line and on the original-speech line, which get taller by about the readings' size; Traditional
+    characters in place of Simplified, which changes the text but not the height."""
     def panel_height(log, **fields):
         # First run shows sample captions (and opens Settings, a layer-0 window).
         settings(hasCompletedFirstRun=False, **fields)
@@ -300,18 +301,33 @@ def test_reading_aid(work, args):
         assert wins, f"no sample captions on screen: {fields}"
         return max(wins, key=lambda w: w["w"])["h"]
     font = 34   # the default caption size; the original speech is 55 % of it
-    results = []
-    for layout in ("rolling", "marquee"):
-        for line, langs, size in (("translation", {"targetLanguage": "ja", "sourceLocale": "en-US"}, font),
-                                  ("original speech", {"targetLanguage": "en", "sourceLocale": "ja-JP"}, font * 0.55)):
-            log = os.path.join(work, f"reading-{layout}-{line.replace(' ', '-')}.log")
-            off = panel_height(log + ".off", overlay={"layout": layout}, **langs)
-            on = panel_height(log, overlay={"layout": layout, "readingAids": {"ja": "furigana"}}, **langs)
-            text = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
-            assert "本日(ほんじつ)はご参加(さんか)" in text, f"{layout}, {line}: no readings worked out: {text.strip()[:300]}"
-            assert on - off >= 0.35 * size, f"{layout}, {line}: captions {off:.0f} pt tall without readings, {on:.0f} with"
+    ja_target, ja_source = {"targetLanguage": "ja", "sourceLocale": "en-US"}, {"targetLanguage": "en", "sourceLocale": "ja-JP"}
+    zh_target, zh_source = {"targetLanguage": "zh", "sourceLocale": "en-US"}, {"targetLanguage": "en", "sourceLocale": "zh-CN"}
+    # (layout, line, languages, aids, text the log must show, height the readings add: None = no readings)
+    cases = [(layout, line, langs, {"ja": "furigana"}, "本日(ほんじつ)はご参加(さんか)", size)
+             for layout in ("rolling", "marquee")
+             for line, langs, size in (("ja translation", ja_target, font), ("ja original speech", ja_source, font * 0.55))]
+    cases += [("rolling", "zh translation", zh_target, {"zh": "pinyin"}, "感(gǎn)谢(xiè)大(dà)家(jiā)", font),
+              ("rolling", "zh original speech", zh_source, {"zh": "pinyin,traditional"}, "感(gǎn)謝(xiè)", font * 0.55),
+              ("marquee", "zh translation", zh_target, {"zh": "traditional"}, "感謝大家今天的參與", None)]
+    offs, results = {}, []
+    for layout, line, langs, aids, expected, size in cases:
+        log = os.path.join(work, f"reading-{layout}-{line.replace(' ', '-')}-{len(results)}.log")
+        key = (layout, json.dumps(langs, sort_keys=True))
+        if key not in offs:
+            offs[key] = panel_height(log + ".off", overlay={"layout": layout}, **langs)
+        off = offs[key]
+        on = panel_height(log, overlay={"layout": layout, "readingAids": aids}, **langs)
+        text = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+        label = f"{layout}, {line}, {aids}"
+        assert expected in text, f"{label}: the log doesn't show {expected}: {text.strip()[:300]}"
+        if size is None:
+            assert abs(on - off) <= 2, f"{label}: captions {off:.0f} pt tall as written, {on:.0f} converted"
+            results.append(f"{layout} {line} converted, same height")
+        else:
+            assert on - off >= 0.35 * size, f"{label}: captions {off:.0f} pt tall without readings, {on:.0f} with"
             results.append(f"{layout} {line} +{on - off:.0f} pt")
-    return "readings under the kanji: " + ", ".join(results)
+    return "; ".join(results)
 
 
 def engine(engine_name, work, args):

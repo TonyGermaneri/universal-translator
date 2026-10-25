@@ -334,13 +334,14 @@ final class CaptionStore {
 enum DemoText {
     struct Sample { var source1, target1, source2, target2Committed, target2Ghost: String }
 
-    /// Sample captions in `language`; the original speech is English, or Japanese when that's the speech
+    /// Sample captions in `language`; the original speech is English, or Japanese or Chinese when that's the speech
     /// language (so its reading aid shows too).
     static func sample(for language: String, from source: String = "en") -> Sample {
         var sample = translated(language)
-        if source.hasPrefix("ja"), !language.hasPrefix("ja") {
-            sample.source1 = "本日はご参加いただきありがとうございます。"
-            sample.source2 = "まずは簡単に"
+        if let speech = ["ja", "zh"].first(where: { source.hasPrefix($0) }), !language.hasPrefix(speech) {
+            let spoken = translated(speech)
+            sample.source1 = spoken.target1
+            sample.source2 = spoken.target2Committed + spoken.target2Ghost
         }
         return sample
     }

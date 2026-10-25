@@ -9,19 +9,19 @@ import TranslatorCore
 @Suite struct ReadingAidSettingsTests {
     @Test func anAidAppliesToEveryLineInItsLanguage() {
         var o = OverlaySettings()
-        #expect(o.readingAid(for: "ja") == nil, "off by default")
+        #expect(o.readingAids(for: "ja").isEmpty, "off by default")
         o.readingAids["ja"] = "furigana"
         // The translation ("ja") and the original speech ("ja-JP") alike.
-        #expect(o.readingAid(for: "ja") == .furigana)
-        #expect(o.readingAid(for: "ja-JP") == .furigana)
-        #expect(o.readingAid(for: "en-US") == nil)
+        #expect(o.readingAids(for: "ja") == [.furigana])
+        #expect(o.readingAids(for: "ja-JP") == [.furigana])
+        #expect(o.readingAids(for: "en-US").isEmpty)
     }
 
     @Test func anAidStoredUnderTheWrongLanguageOrUnknownIsIgnored() {
         var o = OverlaySettings()
         o.readingAids = ["en": "furigana", "ja": "someFutureAid"]
-        #expect(o.readingAid(for: "en") == nil)
-        #expect(o.readingAid(for: "ja") == nil)
+        #expect(o.readingAids(for: "en").isEmpty)
+        #expect(o.readingAids(for: "ja").isEmpty)
     }
 
     @Test @MainActor func settingsNamingAnUnknownAidStillLoad() throws {
@@ -29,7 +29,7 @@ import TranslatorCore
         let data = Data(#"{"targetLanguage":"fr","overlay":{"fontSize":50,"readingAids":{"ja":"pinyinOrWhatever"}}}"#.utf8)
         let loaded = try SettingsStore.decodeMergingDefaults(data)
         #expect(loaded.targetLanguage == "fr" && loaded.overlay.fontSize == 50)
-        #expect(loaded.overlay.readingAid(for: "ja") == nil)
+        #expect(loaded.overlay.readingAids(for: "ja").isEmpty)
     }
 
     @Test func settingsOfferAidsForTheLanguagesOnScreen() {
@@ -39,11 +39,42 @@ import TranslatorCore
         #expect(ReadingAid.languages(offeredFor: ["fr", "en-US"]).isEmpty)
     }
 
-    @Test func sampleCaptionsSpeakJapaneseWhenThatIsTheSpeechLanguage() {
+    @Test func chineseCanHaveReadingsAndAScriptTogether() {
+        var o = OverlaySettings()
+        o.readingAids["zh"] = "pinyin,traditional"
+        #expect(o.readingAids(for: "zh-Hans") == [.pinyin, .traditional])
+        #expect(o.readingAids(for: "zh-TW") == [.pinyin, .traditional])
+        #expect(o.readingAids(for: "ja").isEmpty)
+    }
+
+    @Test @MainActor func anotherScriptKeepsEachRunsStyle() {
+        // Fade-in and revision highlights color runs of characters: converting must keep them where they were.
+        let red = NSColor.red, blue = NSColor.blue
+        let text = NSMutableAttributedString(string: "我们", attributes: [.foregroundColor: red])
+        text.append(NSAttributedString(string: "软件", attributes: [.foregroundColor: blue]))
+        let shown = Ruby.annotated(text, aids: [.traditional])
+        #expect(shown.string == "我們軟件")
+        #expect(shown.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == red)
+        #expect(shown.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor == blue)
+        #expect(shown.attribute(.ctRuby, at: 0, effectiveRange: nil) == nil, "a script aid alone adds no readings")
+    }
+
+    @Test @MainActor func pinyinSyllablesKeepApart() {
+        let text = NSAttributedString(string: "我们先", attributes: [.font: NSFont.systemFont(ofSize: 30)])
+        let shown = Ruby.annotated(text, aids: [.pinyin])
+        let ruby = shown.attribute(.ctRuby, at: 1, effectiveRange: nil) as! CTRubyAnnotation
+        #expect(CTRubyAnnotationGetTextForPosition(ruby, .after) as String? == "\u{2009}men\u{2009}")
+        // Furigana sits over whole words and keeps its spacing.
+        #expect(Ruby.spaced("きょう", aids: [.furigana]) == "きょう")
+    }
+
+    @Test func sampleCaptionsSpeakJapaneseOrChineseWhenThatIsTheSpeechLanguage() {
         // So Preview shows the original-speech line's reading aid too.
         #expect(DemoText.sample(for: "en", from: "ja-JP").source1.contains("本日"))
         #expect(DemoText.sample(for: "en", from: "en-US").source1.hasPrefix("Thanks"))
         #expect(DemoText.sample(for: "ja", from: "ja-JP").target1.contains("本日"))
+        #expect(DemoText.sample(for: "en", from: "zh-CN").source1 == "感谢大家今天的参与。")
+        #expect(DemoText.sample(for: "en", from: "zh-CN").source2 == "我们先快速看一下")
     }
 
     @Test @MainActor func readingsGoUnderTheKanjiOnly() throws {
@@ -51,7 +82,7 @@ import TranslatorCore
         let text = NSAttributedString(string: "今日は田中さんに会います", attributes: [
             .font: NSFont.systemFont(ofSize: 30), .foregroundColor: color,
         ])
-        let annotated = Ruby.annotated(text, aid: .furigana)
+        let annotated = Ruby.annotated(text, aids: [.furigana])
         var found: [String: String] = [:]
         annotated.enumerateAttribute(.ctRuby, in: NSRange(location: 0, length: annotated.length)) { value, range, _ in
             guard let value else { return }

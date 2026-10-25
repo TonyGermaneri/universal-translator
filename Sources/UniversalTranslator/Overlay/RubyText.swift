@@ -4,25 +4,45 @@ import CoreText
 import SwiftUI
 import TranslatorCore
 
-/// Caption text with readings (furigana) under it. SwiftUI's Text doesn't draw ruby, so text with a reading aid
+/// Caption text with readings (furigana, pinyin) under it, or in another script. SwiftUI's Text doesn't draw ruby, so text with a reading aid
 /// on is drawn by Core Text instead.
 enum Ruby {
     /// Readings take this fraction of the text size.
     static let sizeFactor: CGFloat = 0.5
 
-    /// `text` with each reading the aid gives attached under its piece of text, in that piece's color.
+    /// `text` with the aids applied: characters in the script chosen, and each reading attached under its piece of
+    /// text, in that piece's color.
     @MainActor
-    static func annotated(_ text: NSAttributedString, aid: ReadingAid) -> NSAttributedString {
+    static func annotated(_ text: NSAttributedString, aids: [ReadingAid]) -> NSAttributedString {
+        guard !aids.isEmpty else { return text }
         let out = NSMutableAttributedString(attributedString: text)
         var location = 0
-        for segment in segments(text.string, aid: aid) {
+        for segment in segments(text.string, aids: aids) {
             let length = segment.text.utf16.count
             defer { location += length }
-            guard let reading = segment.reading, length > 0, location + length <= out.length else { continue }
+            guard length > 0, location + length <= out.length else { continue }
+            let range = NSRange(location: location, length: length)
+            if out.attributedSubstring(from: range).string != segment.text {
+                // Same length: replace style run by style run so each keeps its own color and font.
+                let replacement = segment.text as NSString
+                var runs: [NSRange] = []
+                out.enumerateAttributes(in: range) { _, run, _ in runs.append(run) }
+                for run in runs {
+                    out.replaceCharacters(in: run, with: replacement.substring(with: NSRange(location: run.location - location, length: run.length)))
+                }
+            }
+            guard let reading = segment.reading else { continue }
             let color = out.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor ?? .white
-            out.addAttribute(.ctRuby, value: annotation(reading, color: color), range: NSRange(location: location, length: length))
+            out.addAttribute(.ctRuby, value: annotation(spaced(reading, aids: aids), color: color),
+                             range: NSRange(location: location, length: length))
         }
         return out
+    }
+
+    /// Pinyin syllables are about as wide as their characters, so side by side they run together ("menxiān"): a thin
+    /// space either side keeps them apart (the characters spread a little to make room).
+    static func spaced(_ reading: String, aids: [ReadingAid]) -> String {
+        aids.contains(.pinyin) ? "\u{2009}" + reading + "\u{2009}" : reading
     }
 
     /// A reading under its text (Core Text's "after" side, which is below for horizontal text).
@@ -38,14 +58,16 @@ enum Ruby {
     @MainActor private static var cache: [String: [ReadingSegment]] = [:]
 
     @MainActor
-    static func segments(_ text: String, aid: ReadingAid) -> [ReadingSegment] {
-        let key = aid.rawValue + "|" + text
+    static func segments(_ text: String, aids: [ReadingAid]) -> [ReadingSegment] {
+        let name = ReadingAid.stored(aids)
+        let key = name + "|" + text
         if let hit = cache[key] { return hit }
         if cache.count > 400 { cache.removeAll() }
-        let segments = aid.segments(text)
+        let segments = ReadingAid.segments(text, aids: aids)
         cache[key] = segments
-        if segments.contains(where: { $0.reading != nil }) {
-            DebugLog.write("READING \(aid.rawValue) " + segments.map { s in s.reading.map { "\(s.text)(\($0))" } ?? s.text }.joined())
+        let shown = segments.map { s in s.reading.map { "\(s.text)(\($0))" } ?? s.text }.joined()
+        if shown != text {
+            DebugLog.write("READING \(name) " + shown)
         }
         return segments
     }
