@@ -156,6 +156,20 @@ The Hy-MT2 models run on **llama.cpp** (default) or **MLX** (Settings → Transl
 
 Japanese flickers more because its verb comes last, so provisional words change more often. Speed depends on what else is using the GPU.
 
+### Measured the other way: speech in Japanese, Chinese or Korean → English captions
+
+M4, `scripts/evaluate.py --source <locale> --revision off`, the same four passages spoken by the macOS voices, scored against the English passages (llama.cpp; MLX's chrF is within two points, its final captions 55–130 ms later). English → Japanese on the same Mac for comparison.
+
+| Speech → captions | Recognition error | First caption after the speaker starts | Final caption after speech ends | chrF vs reference | Script alone (`--script-only`, no speech) |
+| --- | --- | --- | --- | --- | --- |
+| English → Japanese | WER 1.2% | 2.0 s | 0.56 s | 50.7 (Japanese characters) | 55.1 |
+| Japanese → English | CER 4.4% | 6.3 s (monologue: 31 s) | 0.60 s | 61.6 | 63.3 |
+| Chinese (Mainland) → English | CER 1.1% | 3.5 s | 0.46 s | 62.7 | 68.3 |
+| Chinese (Taiwan) → English | broken: `<unk>` only | | | 1.8 | 68.8 |
+| Korean → English | WER 11.2% (CER 0.8%: spacing) | 2.8 s | 0.39 s | 59.1 | 65.6 |
+
+Japanese and Chinese have no spaces, so no word counts as stable until the speaker pauses, and captions appear only at the end of each utterance. Korean (written with spaces) gets live captions like English. Nemotron's zh-TW setting writes only `<unk>`; the same Taiwanese voice with zh-CN is recognized at CER 1.6%.
+
 ## The overlay
 
 A borderless, non-activating `NSPanel` that never takes focus.
@@ -206,10 +220,14 @@ The menu bar menu shows whether anything leaves the Mac. It also switches what t
 - end-of-turn detection delay, and how many turns the model decided;
 - normalized erasure (NE: visible characters taken back), overall and for committed text;
 - replaced finals and accepted revisions;
-- the recognizer's word error rate against the script.
+- the recognizer's error rate against the script (word error rate; character error rate for Japanese and Chinese);
+- chrF of the captions against a reference translation (character n-gram F-score, 0–100).
+
+`--source ja-JP`, `zh-CN`, `zh-TW` or `ko-KR` speaks the same passages in that language (voices Kyoko, Tingting, Meijia, Yuna) and captions them in English by default; each language's passages are the reference translation for the others.
 
 ```sh
 scripts/evaluate.py --target de --recognizer appleSpeech --vad energy --turn off --revision off
+scripts/evaluate.py --source ja-JP --revision off --engine mlx
 scripts/evaluate.py --target ja --live lmStudio --lmstudio-url http://localhost:1234 --lmstudio-model qwen/qwen3-8b
 ```
 

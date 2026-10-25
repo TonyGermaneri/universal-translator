@@ -275,7 +275,8 @@ final class SpeechPipeline: SpeechEngine {
             boundary = nil // the turn's words have all been handed over
         }
         translation.update(sentence, speechEndedAgo: sentence.isComplete ? speechEndedAgo : nil,
-                           speechEnd: sentence.isComplete ? speechEnd(of: sentence) : nil)
+                           speechEnd: sentence.isComplete ? speechEnd(of: sentence) : nil,
+                           speechStartedAgo: pending.first.map { latest.time - $0.start })
         let rest = pending.dropFirst(sentence.tokens.count).map(\.text).joined()
         captions.liveSource = rest.trimmingCharacters(in: .whitespacesAndNewlines)
     }

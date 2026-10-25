@@ -143,8 +143,11 @@ final class LiveTranslationController {
 
     /// The engine reports the sentence in progress (stable source only) on every tick. `speechEndedAgo`: for a
     /// complete utterance, how long ago its speech ended (for latency metrics); `speechEnd`: where, on the audio
-    /// timeline.
-    func update(_ sentence: SourceFrontier.Sentence, speechEndedAgo: Double? = nil, speechEnd: Double? = nil) {
+    /// timeline. `speechStartedAgo`: how long ago the first word of the unit in progress was spoken, stable or not
+    /// (for latency metrics: in Japanese or Chinese no word is stable until the utterance ends).
+    func update(_ sentence: SourceFrontier.Sentence, speechEndedAgo: Double? = nil, speechEnd: Double? = nil,
+                speechStartedAgo: Double? = nil) {
+        if let ago = speechStartedAgo { metrics.speechStarted(at: now - ago) }
         guard !sentence.tokens.isEmpty else { return }
         latest = sentence
         latestSpeechEnd = speechEnd
@@ -334,12 +337,14 @@ struct SentenceMetrics {
     private var completedAt: Double?
     private var finishedAt: Double?
     private var speechEndedAt: Double?
+    private var speechStartedAt: Double?
     private var displayed = ""
     private var displayedCommitted = ""
     private var committedLength = 0
     private var erased = 0
     private var committedErased = 0
     private var finalLength = 0
+    private var translation = ""
     private var replaced = false
 
     mutating func sourceSeen(at t: Double) {
@@ -365,10 +370,12 @@ struct SentenceMetrics {
 
     mutating func completed(at t: Double) { if completedAt == nil { completedAt = t } }
     mutating func speechEnded(at t: Double) { if speechEndedAt == nil { speechEndedAt = t } }
+    mutating func speechStarted(at t: Double) { if speechStartedAt == nil { speechStartedAt = t } }
 
     mutating func finished(at t: Double, translation: String, replaced: Bool) {
         finishedAt = t
         finalLength = translation.count
+        self.translation = translation
         self.replaced = replaced
     }
 
@@ -382,8 +389,10 @@ struct SentenceMetrics {
         func ms(_ a: Double?, _ b: Double?) -> Int { guard let a, let b else { return -1 }; return Int((b - a) * 1000) }
         let fields: [String: Any] = [
             "source": source,
+            "translation": translation,
             "words": source.split(separator: " ").count,
             "firstOutputMs": ms(firstSourceAt, firstOutputAt),
+            "firstOutputAfterSpeechStartMs": ms(speechStartedAt, firstOutputAt),
             "finishAfterCompleteMs": ms(completedAt, finishedAt),
             "finishAfterSpeechMs": ms(speechEndedAt, finishedAt),
             "durationMs": ms(firstSourceAt, finishedAt),

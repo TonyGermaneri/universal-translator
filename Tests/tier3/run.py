@@ -11,11 +11,14 @@ checks behind the macOS 15 port and the Dock icon.
   model_import     hand-downloaded models (copies of the real ones) are checked and installed; a corrupt one isn't
   engine_llamacpp  Nemotron + Silero VAD + Smart Turn + Hy-MT2 1.8B (llama.cpp), scripts/evaluate.py's passages
   engine_mlx       the same with Hy-MT2 1.8B on MLX
+  to_english_llamacpp  Japanese, Chinese and Korean speech (Kyoko, Tingting, Yuna) to English captions on llama.cpp:
+                   recognition error, chrF against the reference English, caption lag (limits in TO_ENGLISH)
+  to_english_mlx   the same on MLX
   system_audio     a tapped process (UT_TAP_PID), launched with `open` so the app asks for its own permission
   mic              the real microphone hearing speech the Mac says aloud (only with --speaker: it plays out loud)
 
 usage: Tests/tier3/run.py [--only NAME ...] [--speaker] [--quick] [--keep DIR]
-  --quick   two passages per engine instead of four
+  --quick   two passages per engine instead of four; for to_english one per language instead of two
 Build first (scripts/build-app.sh). Needs the models downloaded; a test that can't run says why and counts as a skip,
 listed at the end. One run at a time: it refuses to start while any copy of the app is running.
 """
@@ -108,16 +111,29 @@ def sentences(log):
     return [json.loads(m) for m in re.findall(r"\] SENTENCE (\{.*\})", log)]
 
 
-def stalled_at(passage_text, log):
-    """None if the recognized text reaches the passage's last words; otherwise the last log time, in seconds.
-    Seen 2026-10-23: a llama.cpp run that stopped logging mid-passage (no crash), which otherwise only shows as a
-    high word error rate."""
-    words = evaluate.normalize_words(passage_text)[-3:]
-    heard = evaluate.normalize_words(" ".join(s["source"] for s in sentences(log)))
-    if any(heard[i:i + 3] == words for i in range(len(heard))):
+def stalled_at(passage_text, log, locale="en-US"):
+    """None if the recognized text reaches the passage's last words (last four characters in Japanese or Chinese,
+    in the second half of what was heard); otherwise the last log time, in seconds. Seen 2026-10-23: a llama.cpp run
+    that stopped logging mid-passage (no crash), which otherwise only shows as a high word error rate."""
+    def units(text):
+        if locale.split("-")[0] in ("ja", "zh"):
+            return list(evaluate.normalize_chars(locale, text))
+        return evaluate.korean_words(text) if locale.startswith("ko") else evaluate.normalize_words(text)
+    n = 4 if locale.split("-")[0] in ("ja", "zh") else 3
+    end = units(passage_text)[-n:]
+    heard = units(" ".join(s["source"] for s in sentences(log)))
+    if any(heard[i:i + n] == end for i in range(len(heard) // 2, len(heard))):
         return None
     times = re.findall(r"^\[ *([\d.]+)\]", log, re.M)
     return float(times[-1]) if times else 0.0
+
+
+def stalled_run(logs, p, text, log, locale="en-US"):
+    """An evaluate.py passage that stalled: its end wasn't heard *and* evaluate.py sampled the app because its log
+    had gone quiet for 10 s. The last log time, or None. Seen 2026-10-25: Japanese recognized as Chinese never
+    reaches the passage's last words though the app kept working; that's for the recognition limits to judge."""
+    stall = stalled_at(text, log, locale)
+    return stall if stall is not None and os.path.exists(os.path.join(logs, f"{p}.sample.txt")) else None
 
 
 def require_models(*names):
@@ -337,7 +353,7 @@ def test_stall_capture(work, args):
     with open(fake, "w") as f:
         f.write("#!/bin/bash\ntrap '' TERM\necho '[   0.50] started' >> \"$UT_DEBUG_LOG\"\nwhile true; do sleep 1; done\n")
     os.chmod(fake, 0o755)
-    opts = argparse.Namespace(voice="Samantha", tail=9.0, keep_logs=os.path.join(work, "stuck"), target="ja",
+    opts = argparse.Namespace(source="en-US", voice="Samantha", tail=9.0, keep_logs=os.path.join(work, "stuck"), target="ja",
                               live="localLLM", revision="off", engine="llamaCpp", stability=0.5, vad="silero", turn="on",
                               recognizer="nemotron", lmstudio_url="", lmstudio_model="", lmstudio_template="automatic")
     real = evaluate.APP
@@ -350,7 +366,14 @@ def test_stall_capture(work, args):
     assert "stuck.sample.txt" in kept, f"a quiet log wasn't sampled: {kept}"
     assert "stuck.quit-sample.txt" in kept and r["slowQuit"], f"a slow quit wasn't sampled: {kept}"
     assert subprocess.run(["pgrep", "-f", fake], capture_output=True).returncode != 0, "the stuck app was left running"
-    return "a quiet log and a slow quit are both sampled; the stuck app is killed"
+    # The engine tests call that a stall; the same unfinished log without the sample (the app kept logging) isn't.
+    log = open(os.path.join(opts.keep_logs, "stuck.log"), encoding="utf-8").read()
+    assert stalled_run(opts.keep_logs, "stuck", "Hello there.", log) is not None, "a sampled quiet log isn't a stall"
+    unsampled = os.path.join(work, "misheard")
+    os.makedirs(unsampled)
+    shutil.copy(os.path.join(opts.keep_logs, "stuck.log"), unsampled)
+    assert stalled_run(unsampled, "stuck", "Hello there.", log) is None, "a log that never went quiet counts as a stall"
+    return "a quiet log and a slow quit are both sampled; the stuck app is killed; only a quiet log is a stall"
 
 
 def test_transcript(work, args):
@@ -399,35 +422,47 @@ def test_transcript(work, args):
     return f"{len(entries)} sentences in {saved[0]}"
 
 
-def engine(engine_name, work, args):
-    require_models(*NEEDED.items(), LIVE[engine_name])
-    logs = os.path.join(work, engine_name)
+def run_evaluate(engine_name, logs, passages, *extra):
     cmd = [sys.executable, "-I", os.path.join(ROOT, "scripts", "evaluate.py"), "--revision", "off",
-           "--engine", engine_name, "--keep-logs", logs]
-    passages = ["meeting", "questions"] if args.quick else sorted(evaluate.PASSAGES)
+           "--engine", engine_name, "--keep-logs", logs, *extra]
     for p in passages:
         cmd += ["--passage", p]
     subprocess.run(cmd, check=True, capture_output=True)
+
+
+def checked_passage(engine_name, logs, p, text, locale="en-US"):
+    """One passage's log from evaluate.py, checked for what every engine run needs: the neural endpointing, the
+    engine's model translating, finished sentences, no stall and no slow quit. Returns evaluate.parse's result."""
+    label = p if locale == "en-US" else f"{locale} {p}"
+    log = open(os.path.join(logs, f"{p}.log"), encoding="utf-8").read()
+    # The neural VAD and end-of-turn model, not the energy fallback a failed download leaves behind.
+    assert "ENDPOINT vad=silero turn=smart-turn" in log, f"{label}: not on Silero VAD + Smart Turn"
+    assert f"LLM {LIVE_ID[engine_name]} " in log, f"{label}: {LIVE[engine_name][0]} didn't translate anything"
+    r = evaluate.parse(log)
+    assert r["sentences"], f"{label}: no sentence finished"
+    stall = stalled_run(logs, p, text, log, locale)
+    slow_quit = os.path.exists(os.path.join(logs, f"{p}.quit-sample.txt"))
+    if stall is not None or slow_quit:
+        # evaluate.py sampled the stuck app; keep the samples and the log past the run's temporary folder.
+        kept = os.path.join(ROOT, ".build", f"stall-{engine_name}-{locale}-{p}-{time.strftime('%Y%m%d-%H%M%S')}")
+        os.makedirs(kept, exist_ok=True)
+        for f in (f"{p}.log", f"{p}.sample.txt", f"{p}.quit-sample.txt"):
+            if os.path.exists(os.path.join(logs, f)):
+                shutil.copy(os.path.join(logs, f), kept)
+    assert stall is None, f"{label}: the app stopped before the end of the passage (last log line at {stall:.1f} s); " \
+                          f"log and process sample in {kept}"
+    assert not slow_quit, f"{label}: the app took more than 10 s to quit; log and process sample in {kept}"
+    return r
+
+
+def engine(engine_name, work, args):
+    require_models(*NEEDED.items(), LIVE[engine_name])
+    logs = os.path.join(work, engine_name)
+    passages = ["meeting", "questions"] if args.quick else sorted(evaluate.PASSAGES)
+    run_evaluate(engine_name, logs, passages)
     total, errors, words, live = 0, 0, 0, []
     for p in passages:
-        log = open(os.path.join(logs, f"{p}.log"), encoding="utf-8").read()
-        # The neural VAD and end-of-turn model, not the energy fallback a failed download leaves behind.
-        assert "ENDPOINT vad=silero turn=smart-turn" in log, f"{p}: not on Silero VAD + Smart Turn"
-        assert f"LLM {LIVE_ID[engine_name]} " in log, f"{p}: {LIVE[engine_name][0]} didn't translate anything"
-        r = evaluate.parse(log)
-        assert r["sentences"], f"{p}: no sentence finished"
-        stall = stalled_at(evaluate.PASSAGES[p], log)
-        slow_quit = os.path.exists(os.path.join(logs, f"{p}.quit-sample.txt"))
-        if stall is not None or slow_quit:
-            # evaluate.py sampled the stuck app; keep the samples and the log past the run's temporary folder.
-            kept = os.path.join(ROOT, ".build", f"stall-{engine_name}-{p}-{time.strftime('%Y%m%d-%H%M%S')}")
-            os.makedirs(kept, exist_ok=True)
-            for f in (f"{p}.log", f"{p}.sample.txt", f"{p}.quit-sample.txt"):
-                if os.path.exists(os.path.join(logs, f)):
-                    shutil.copy(os.path.join(logs, f), kept)
-        assert stall is None, f"{p}: the app stopped before the end of the passage (last log line at {stall:.1f} s); " \
-                              f"log and process sample in {kept}"
-        assert not slow_quit, f"{p}: the app took more than 10 s to quit; log and process sample in {kept}"
+        r = checked_passage(engine_name, logs, p, evaluate.PASSAGES[p])
         for s in r["sentences"]:
             assert not s["replacedCommitted"], f"{p}: a final caption was replaced: {s['source']}"
             assert s["committedErasure"] == 0, f"{p}: text shown as final changed: {s['source']}"
@@ -439,6 +474,81 @@ def engine(engine_name, work, args):
     assert wer <= 0.05, f"word error rate {wer:.1%} (limit 5%)"
     assert p50 <= 600, f"live translation p50 {p50} ms (limit 600 ms)"
     return f"{total} sentences, WER {wer:.1%}, live p50 {p50} ms, nothing final changed"
+
+
+# Speech in Japanese, Chinese and Korean captioned in English: the direction the app was built for, and what the
+# org's managers need (scripts/evaluate.py's passages, scored against the English ones). Limits per passage (--quick
+# runs only the meeting), a margin beyond the first measurement (2026-10-25, M4, llama.cpp / MLX):
+#   meeting    ja CER 5.8 %, chrF 44.0/45.2, first caption 4.5/4.6 s after the speaker starts, final 0.54/0.63 s
+#              after speech ends; zh CER 0.8 %, 46.6/45.5, 2.9/3.0 s, 0.44/0.52 s; ko WER 17.4 % (CER 0.6 %),
+#              47.1/48.0, 2.3/2.3 s, 0.41/0.47 s
+#   monologue  ja CER 0 %, chrF 62.3/62.6, 31.2/31.8 s, 1.5/2.1 s; zh CER 0 %, 68.7/65.2, 5.2/5.2 s, 0.58/0.71 s;
+#              ko WER 4.2 % (CER 0 %), 51.5/52.7, 6.0/6.0 s, 0.34/0.34 s
+# Japanese and Chinese get no caption until an utterance ends (the Japanese monologue is one 30 s utterance), so
+# their lag limits hold today's behavior: tighten them when that improves. Korean's WER mostly counts spacing
+# (참여해 주셔서 / 참여해주셔서), so its CER is limited too. zh-TW isn't here: Nemotron's zh-TW prompt writes only
+# <unk> (CER 490 %), while the same Taiwanese voice with zh-CN gets 1.6 %.
+TO_ENGLISH = {  # locale: {passage: (recognition error limit, chrF floor, first-caption lag ms, after-speech ms)}
+    "ja-JP": {"meeting": (0.08, 38, 5500, 1000), "monologue": (0.03, 55, 34000, 3000)},
+    "zh-CN": {"meeting": (0.03, 40, 3700, 900), "monologue": (0.03, 58, 6200, 1100)},
+    "ko-KR": {"meeting": (0.22, 41, 3000, 900), "monologue": (0.08, 45, 7000, 800)},
+}
+TO_ENGLISH_KO_CER = 0.03
+
+
+def to_english(engine_name, work, args):
+    require_models(("Nemotron (all languages)", "nemotron-asr-multilingual-560ms"), *list(NEEDED.items())[1:],
+                   LIVE[engine_name])
+    passages = ["meeting"] if args.quick else ["meeting", "monologue"]
+    results = []
+    for locale, limits in TO_ENGLISH.items():
+        logs = os.path.join(work, f"{engine_name}-{locale}")
+        run_evaluate(engine_name, logs, passages, "--source", locale)
+        for p in passages:
+            error_limit, chrf_floor, lag_limit, after_limit = limits[p]
+            stats = to_english_stats(engine_name, logs, [p], locale)
+            rate, measure, chrf, lag, after = (stats[k] for k in ("error", "measure", "chrf", "lag", "after"))
+            label = f"{locale} {p}"
+            assert rate <= error_limit, f"{label}: recognition {measure} {rate:.1%} (limit {error_limit:.0%})"
+            if stats["cer"] is not None:
+                assert stats["cer"] <= TO_ENGLISH_KO_CER, \
+                    f"{label}: recognition CER {stats['cer']:.1%} (limit {TO_ENGLISH_KO_CER:.0%})"
+            assert chrf >= chrf_floor, f"{label}: English captions chrF {chrf:.1f} against the reference (floor {chrf_floor})"
+            assert lag <= lag_limit, \
+                f"{label}: first caption {lag / 1000:.1f} s after the speaker starts (limit {lag_limit / 1000:.1f} s)"
+            assert after <= after_limit, f"{label}: final caption {after:.0f} ms after speech ends (limit {after_limit} ms)"
+            results.append(f"{label} {measure} {rate:.1%} chrF {chrf:.0f} lag {lag / 1000:.1f} s")
+    return "; ".join(results)
+
+
+def to_english_stats(engine_name, logs, passages, locale):
+    errors, units, char_errors, chars, references, captions, lags, after = 0.0, 0, 0.0, 0, [], [], [], []
+    for p in passages:
+        text = evaluate.SOURCES[locale][1][p]
+        r = checked_passage(engine_name, logs, p, text, locale)
+        rate, n, measure = evaluate.recognition_error(locale, text, " ".join(s["source"] for s in r["sentences"]))
+        errors, units = errors + rate * n, units + n
+        if locale.startswith("ko"):
+            c, m = evaluate.cer(locale, text, " ".join(s["source"] for s in r["sentences"]))
+            char_errors, chars = char_errors + c * m, chars + m
+        references.append(evaluate.strip_markup(evaluate.PASSAGES[p]))
+        captions.append(" ".join(s["translation"] for s in r["sentences"]))
+        for s in r["sentences"]:
+            assert s["firstOutputAfterSpeechStartMs"] >= 0, f"{locale} {p}: no speech start for {s['source']}"
+            lags.append(s["firstOutputAfterSpeechStartMs"])
+            if s["finishAfterSpeechMs"] >= 0:
+                after.append(s["finishAfterSpeechMs"])
+    return {"error": errors / max(1, units), "measure": measure, "cer": char_errors / chars if chars else None,
+            "chrf": evaluate.chrf(" ".join(references), " ".join(captions)),
+            "lag": sum(lags) / len(lags), "after": sum(after) / max(1, len(after))}
+
+
+def test_to_english_llamacpp(work, args):
+    return to_english("llamaCpp", work, args)
+
+
+def test_to_english_mlx(work, args):
+    return to_english("mlx", work, args)
 
 
 def test_engine_llamacpp(work, args):
@@ -502,14 +612,15 @@ TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay
          ("overlay_grip", test_overlay_grip), ("reading_aid", test_reading_aid), ("model_import", test_model_import),
          ("stall_capture", test_stall_capture), ("transcript", test_transcript),
          ("engine_llamacpp", test_engine_llamacpp),
-         ("engine_mlx", test_engine_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
+         ("engine_mlx", test_engine_mlx), ("to_english_llamacpp", test_to_english_llamacpp),
+         ("to_english_mlx", test_to_english_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--only", action="append", choices=[n for n, _ in TESTS])
     p.add_argument("--speaker", action="store_true", help="allow the microphone test (plays speech out loud)")
-    p.add_argument("--quick", action="store_true", help="two passages per engine instead of four")
+    p.add_argument("--quick", action="store_true", help="fewer passages per engine (see above)")
     p.add_argument("--keep", metavar="DIR", help="keep logs here")
     args = p.parse_args()
     if not os.access(BIN, os.X_OK):
