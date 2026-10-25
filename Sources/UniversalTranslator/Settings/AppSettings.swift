@@ -452,6 +452,8 @@ struct AppSettings: Codable, Equatable {
     var startListeningAtLaunch: Bool = false
     /// A menu bar app: no Dock icon unless Settings or the transcript is open (otherwise it's in the Dock until quit).
     var menuBarOnly = false
+    /// Each listening session's transcript is saved to a text file as it goes (`TranscriptAutosave`).
+    var saveTranscript = false
     var timing = TimingSettings()
     var translation = TranslationSettings()
     var overlay = OverlaySettings()

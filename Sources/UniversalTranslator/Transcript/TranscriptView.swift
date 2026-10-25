@@ -16,7 +16,7 @@ struct TranscriptView: View {
     private static let bottomID = "bottom"
 
     private var rows: [CaptionStore.Sentence] {
-        let all = captions.isDemo ? [] : captions.sentences
+        let all = captions.sessionSentences
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return all }
         return all.filter {

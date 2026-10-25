@@ -353,6 +353,52 @@ def test_stall_capture(work, args):
     return "a quiet log and a slow quit are both sampled; the stuck app is killed"
 
 
+def test_transcript(work, args):
+    """With the transcript saved automatically, a live session (a spoken passage, llama.cpp) leaves one text file
+    with every finished sentence: its clock time, what was said and the translation."""
+    require_models(*NEEDED.items(), LIVE["llamaCpp"])
+    folder = os.path.join(work, "transcripts")
+    audio = os.path.join(work, "transcript.aiff")
+    log = os.path.join(work, "transcript.log")
+    say(evaluate.PASSAGES["questions"] + " [[slnc 2500]]", out=audio)
+    duration = float(re.search(r"estimated duration: ([\d.]+)", subprocess.run(
+        ["afinfo", audio], capture_output=True, text=True).stdout).group(1))
+    settings(saveTranscript=True)
+    launch({"UT_AUDIO_FILE": audio, "UT_AUTOSTART": "1", "UT_DEBUG_LOG": log, "UT_TRANSCRIPTS_DIR": folder})
+    # Until the passage's last sentence is in, plus the 1 s before the file is rewritten. Seen 2026-10-25: the app
+    # went quiet at 11 s (the llama.cpp stall, 4 reruns fine), which a fixed wait passed off as a short transcript.
+    deadline, stuck = time.time() + duration + 20, None
+    while time.time() < deadline:
+        time.sleep(0.5)
+        content = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+        if stalled_at(evaluate.PASSAGES["questions"], content) is None:
+            time.sleep(2)
+            break
+        if os.path.exists(log) and time.time() - os.path.getmtime(log) > 8:
+            pid = subprocess.run(["pgrep", "-nx", "UniversalTranslator"], capture_output=True, text=True).stdout.strip()
+            stuck = os.path.join(ROOT, ".build", f"stall-transcript-{time.strftime('%Y%m%d-%H%M%S')}")
+            os.makedirs(stuck, exist_ok=True)
+            if pid:
+                subprocess.run(["sample", pid, "3", "-file", os.path.join(stuck, "sample.txt")], capture_output=True)
+            shutil.copy(log, stuck)
+            break
+    quit_app()
+    assert stuck is None, f"the app stalled mid-passage; log and process sample in {stuck}"
+    finished = sentences(open(log, encoding="utf-8").read()) if os.path.exists(log) else []
+    assert finished, "no sentence finished"
+    saved = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+    assert len(saved) == 1 and re.fullmatch(r"Transcript \d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d\.txt", saved[0]), \
+        f"expected one transcript file, found {saved}"
+    text = open(os.path.join(folder, saved[0]), encoding="utf-8").read()
+    assert text.startswith("Universal Translator transcript, ") and "English (United States) → Japanese" in text, text[:200]
+    entries = re.findall(r"^\[(\d\d:\d\d:\d\d)\] (.+)\n→ (.+)$", text, re.M)
+    assert len(entries) == len(finished), f"{len(finished)} sentences finished, {len(entries)} in the file:\n{text}"
+    said = [e[1] for e in entries]
+    for s in finished:
+        assert s["source"] in said, f"not in the file: {s['source']}"
+    return f"{len(entries)} sentences in {saved[0]}"
+
+
 def engine(engine_name, work, args):
     require_models(*NEEDED.items(), LIVE[engine_name])
     logs = os.path.join(work, engine_name)
@@ -454,7 +500,7 @@ def test_mic(work, args):
 
 TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
          ("overlay_grip", test_overlay_grip), ("reading_aid", test_reading_aid), ("model_import", test_model_import),
-         ("stall_capture", test_stall_capture),
+         ("stall_capture", test_stall_capture), ("transcript", test_transcript),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
 

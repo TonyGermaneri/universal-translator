@@ -236,6 +236,19 @@ struct GeneralSettings: View {
                     }
                 Note("Closing this window keeps Universal Translator running, in the Dock and the menu bar; quit it with ⌘Q or from either menu. In menu bar only mode, note that on a Mac with a notch macOS hides menu bar icons that don't fit; open the app again from Spotlight or Finder to bring back Settings.")
             }
+
+            Section("Transcript") {
+                Toggle("Save the transcript of each session automatically", isOn: $store.settings.saveTranscript)
+                HStack {
+                    Note("One text file each time you start listening, in Documents › Universal Translator: the time each sentence began, what was said, and its translation. It's updated as you go, including when the second pass revises a sentence.")
+                    Spacer()
+                    Button("Show in Finder") {
+                        let folder = TranscriptAutosave.defaultFolder
+                        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(folder)
+                    }
+                }
+            }
         }
         .task {
             devices = AudioDevices.inputDevices()

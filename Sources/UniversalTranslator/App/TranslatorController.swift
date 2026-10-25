@@ -16,12 +16,23 @@ final class TranslatorController {
     private var isTransitioning = false
     private var restartWork: DispatchWorkItem?
     var onStateChange: (() -> Void)?
+    /// The session's transcript file, when saving it is on.
+    let transcript = TranscriptAutosave()
 
     init(settings: SettingsStore, captions: CaptionStore) {
         self.settings = settings
         self.captions = captions
         translation = LiveTranslationController(captions: captions, settings: settings)
         settings.observe { [weak self] old, new in self?.settingsChanged(old, new) }
+        captions.onFinishedSentenceChange = { [weak self] s in
+            self?.transcript.record(id: s.id, started: s.startedAt, source: s.source, translation: s.committed)
+        }
+    }
+
+    /// A transcript file per listening session (start to stop; pauses and engine restarts don't split it).
+    private func beginTranscript(_ s: AppSettings) {
+        guard s.saveTranscript else { return }
+        transcript.begin(languages: "\(LanguageNames.name(s.sourceLocale)) → \(LanguageNames.name(s.targetLanguage))")
     }
 
     func toggle() {
@@ -41,6 +52,7 @@ final class TranslatorController {
         guard !isListening, !isTransitioning else { return }
         isTransitioning = true
         isListening = true
+        beginTranscript(settings.settings)
         onStateChange?()
         Task {
             await startEngine()
@@ -54,6 +66,7 @@ final class TranslatorController {
         isTransitioning = true
         Task {
             await stopEngine()
+            transcript.end()
             isTransitioning = false
             onStateChange?()
         }
@@ -127,6 +140,9 @@ final class TranslatorController {
     private func settingsChanged(_ old: AppSettings, _ new: AppSettings) {
         if case .error = captions.status, !isListening { captions.status = .idle }
         guard isListening else { return }
+        if old.saveTranscript != new.saveTranscript {
+            if new.saveTranscript { beginTranscript(new) } else { transcript.end() }
+        }
         let needsRestart = old.sourceLocale != new.sourceLocale
             || old.recognizer != new.recognizer
             || old.targetLanguage != new.targetLanguage

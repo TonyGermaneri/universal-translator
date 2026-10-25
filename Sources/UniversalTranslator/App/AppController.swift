@@ -56,6 +56,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // First: unloading models has once taken over 10 s.
+        controller.transcript.end()
         LocalModelStore.shared.unloadAll()
         settings.saveNow()
     }
