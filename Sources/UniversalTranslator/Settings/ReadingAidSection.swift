@@ -28,10 +28,18 @@ struct ReadingAidSection: View {
                     }
                 }
             }
-            Note(languages.isEmpty
-                 ? "Reading aids are offered for Japanese (furigana) and Chinese (pinyin, Traditional or Simplified characters) captions, in the translation or the original speech."
-                 : "Readings come from macOS's dictionary and can be wrong for names and some words. Lines with readings are taller.")
+            Note(Self.note(anyOnScreen: !languages.isEmpty))
         }
+    }
+
+    /// Says which languages have aids at all: only those of the languages on screen are listed above, which looked
+    /// like the app supporting just one.
+    static func note(anyOnScreen: Bool) -> String {
+        let available = "Reading aids exist for \(ReadingAid.summary). Only the languages you speak and translate to "
+            + "(General → Languages) are listed here, for the original speech and the translation alike."
+        return anyOnScreen
+            ? available + " Readings come from macOS's dictionary and can be wrong for names and some words. Lines with readings are taller."
+            : available
     }
 
     /// The language's aid of one kind; setting it keeps the language's aid of the other kind.

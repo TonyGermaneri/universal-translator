@@ -33,6 +33,26 @@ public enum ReadingAid: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// The aid's name in a sentence ("Japanese (furigana)").
+    public var name: String {
+        switch self {
+        case .furigana: return "furigana"
+        case .pinyin: return "pinyin"
+        case .traditional: return "Traditional characters"
+        case .simplified: return "Simplified characters"
+        }
+    }
+
+    /// Every language with an aid and its aids, in English: "Japanese (furigana); Chinese (pinyin, …)".
+    public static var summary: String {
+        var languages: [String] = []
+        for aid in allCases where !languages.contains(aid.language) { languages.append(aid.language) }
+        return languages.map { code in
+            let name = Locale(identifier: "en").localizedString(forLanguageCode: code) ?? code
+            return "\(name) (\(choices(for: code).map(\.name).joined(separator: ", ")))"
+        }.joined(separator: "; ")
+    }
+
     /// The aids offered for captions in `language` (any BCP-47 identifier; only its base language counts).
     public static func choices(for language: String, kind: Kind? = nil) -> [ReadingAid] {
         let code = baseLanguage(language)

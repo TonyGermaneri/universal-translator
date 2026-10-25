@@ -32,6 +32,19 @@ import TranslatorCore
         #expect(loaded.overlay.readingAids(for: "ja").isEmpty)
     }
 
+    @Test func theNoteNamesEveryLanguageWithAnAidAndWhyOnlySomeAreListed() {
+        // Only the languages on screen get a picker, so with Japanese set the Chinese aids were invisible.
+        for onScreen in [true, false] {
+            let note = ReadingAidSection.note(anyOnScreen: onScreen)
+            for aid in ReadingAid.allCases {
+                #expect(note.contains(aid.name), "\(aid) missing from: \(note)")
+            }
+            #expect(note.contains("Japanese") && note.contains("Chinese"))
+            #expect(note.contains("General → Languages"))
+        }
+        #expect(ReadingAid.summary == "Japanese (furigana); Chinese (pinyin, Traditional characters, Simplified characters)")
+    }
+
     @Test func settingsOfferAidsForTheLanguagesOnScreen() {
         #expect(ReadingAid.languages(offeredFor: ["ja", "en-US"]) == ["ja"])
         #expect(ReadingAid.languages(offeredFor: ["en", "ja-JP"]) == ["ja"])
