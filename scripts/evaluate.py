@@ -85,14 +85,24 @@ def run_passage(name, text, args, workdir):
     if os.path.exists(log) and time.time() - os.path.getmtime(log) > 10 and proc.poll() is None:
         subprocess.run(["sample", str(proc.pid), "3", "-file", sample], capture_output=True)
     proc.terminate()
-    proc.wait(timeout=10)
+    # Seen 2026-10-24 (llama.cpp, while a build ran): the app took over 10 s to quit. Record what it was doing.
+    quit_sample = os.path.join(workdir, f"{name}.quit-sample.txt")
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        subprocess.run(["sample", str(proc.pid), "3", "-file", quit_sample], capture_output=True)
+        proc.kill()
+        proc.wait()
+        print(f"{name}: the app took more than 10 s to quit (sampled, then killed)", file=sys.stderr)
     if args.keep_logs and os.path.exists(log):
         os.makedirs(args.keep_logs, exist_ok=True)
         subprocess.run(["cp", log, os.path.join(args.keep_logs, f"{name}.log")])
-        if os.path.exists(sample):
-            subprocess.run(["cp", sample, os.path.join(args.keep_logs, f"{name}.sample.txt")])
+        for kept in (sample, quit_sample):
+            if os.path.exists(kept):
+                subprocess.run(["cp", kept, args.keep_logs])
     r = parse(open(log, encoding="utf-8").read() if os.path.exists(log) else "")
     r["wer"] = wer(text, " ".join(x.get("source", "") for x in r["sentences"]))
+    r["slowQuit"] = os.path.exists(quit_sample)
     return r
 
 

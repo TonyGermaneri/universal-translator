@@ -330,6 +330,29 @@ def test_reading_aid(work, args):
     return "; ".join(results)
 
 
+def test_stall_capture(work, args):
+    """The engine tests' evidence for a stuck app: evaluate.py samples an app whose log has gone quiet, and one that
+    doesn't quit when asked, then kills it. Checked with a stand-in app that logs once, then ignores everything."""
+    fake = os.path.join(work, "stuck-app")
+    with open(fake, "w") as f:
+        f.write("#!/bin/bash\ntrap '' TERM\necho '[   0.50] started' >> \"$UT_DEBUG_LOG\"\nwhile true; do sleep 1; done\n")
+    os.chmod(fake, 0o755)
+    opts = argparse.Namespace(voice="Samantha", tail=9.0, keep_logs=os.path.join(work, "stuck"), target="ja",
+                              live="localLLM", revision="off", engine="llamaCpp", stability=0.5, vad="silero", turn="on",
+                              recognizer="nemotron", lmstudio_url="", lmstudio_model="", lmstudio_template="automatic")
+    real = evaluate.APP
+    evaluate.APP = fake
+    try:
+        r = evaluate.run_passage("stuck", "Hello there.", opts, work)
+    finally:
+        evaluate.APP = real
+    kept = sorted(os.listdir(opts.keep_logs))
+    assert "stuck.sample.txt" in kept, f"a quiet log wasn't sampled: {kept}"
+    assert "stuck.quit-sample.txt" in kept and r["slowQuit"], f"a slow quit wasn't sampled: {kept}"
+    assert subprocess.run(["pgrep", "-f", fake], capture_output=True).returncode != 0, "the stuck app was left running"
+    return "a quiet log and a slow quit are both sampled; the stuck app is killed"
+
+
 def engine(engine_name, work, args):
     require_models(*NEEDED.items(), LIVE[engine_name])
     logs = os.path.join(work, engine_name)
@@ -348,15 +371,17 @@ def engine(engine_name, work, args):
         r = evaluate.parse(log)
         assert r["sentences"], f"{p}: no sentence finished"
         stall = stalled_at(evaluate.PASSAGES[p], log)
-        if stall is not None:
-            # evaluate.py sampled the stuck app; keep the sample and the log past the run's temporary folder.
+        slow_quit = os.path.exists(os.path.join(logs, f"{p}.quit-sample.txt"))
+        if stall is not None or slow_quit:
+            # evaluate.py sampled the stuck app; keep the samples and the log past the run's temporary folder.
             kept = os.path.join(ROOT, ".build", f"stall-{engine_name}-{p}-{time.strftime('%Y%m%d-%H%M%S')}")
             os.makedirs(kept, exist_ok=True)
-            for f in (f"{p}.log", f"{p}.sample.txt"):
+            for f in (f"{p}.log", f"{p}.sample.txt", f"{p}.quit-sample.txt"):
                 if os.path.exists(os.path.join(logs, f)):
                     shutil.copy(os.path.join(logs, f), kept)
         assert stall is None, f"{p}: the app stopped before the end of the passage (last log line at {stall:.1f} s); " \
                               f"log and process sample in {kept}"
+        assert not slow_quit, f"{p}: the app took more than 10 s to quit; log and process sample in {kept}"
         for s in r["sentences"]:
             assert not s["replacedCommitted"], f"{p}: a final caption was replaced: {s['source']}"
             assert s["committedErasure"] == 0, f"{p}: text shown as final changed: {s['source']}"
@@ -429,6 +454,7 @@ def test_mic(work, args):
 
 TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
          ("overlay_grip", test_overlay_grip), ("reading_aid", test_reading_aid), ("model_import", test_model_import),
+         ("stall_capture", test_stall_capture),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
 
