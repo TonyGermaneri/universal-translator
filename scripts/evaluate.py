@@ -16,8 +16,9 @@ Synthesizes test passages with macOS `say`, plays each through the built app in 
   revisions           second-pass revisions applied / evaluated
   WER / CER           recognition error against the script: word error rate for English and Korean, character
                       error rate for Japanese and Chinese (Korean also shows its CER: spacing varies)
-  chrF                how close the finished captions (first pass, before any revision) are to the passage's
-                      reference translation: character n-gram F-score, 0-100
+  chrF                how close the captions, as finally shown (after any second-pass revision), are to the
+                      passage's reference translation: character n-gram F-score, 0-100; "first pass" is the same
+                      before revisions, and "revised … s later" how long after its caption a revision landed
 
 --source picks the speech language and its macOS voice (SOURCES): en-US (Samantha), ja-JP (Kyoko), zh-CN (Tingting),
 zh-TW (Meijia), ko-KR (Yuna). Every language has the same four passages; each serves as the reference translation for
@@ -205,7 +206,9 @@ def run_passage(name, text, args, workdir):
     r["recognition"] = recognition_error(args.source, text, heard)
     r["cer"] = None if args.source.startswith("en") else cer(args.source, text, heard)
     reference = REFERENCES.get(args.target.split("-")[0], {}).get(name)
-    r["chrf"] = (strip_markup(reference), " ".join(x.get("translation", "") for x in r["sentences"])) if reference else None
+    r["chrf"] = (strip_markup(reference), " ".join(x["final"] for x in r["sentences"])) if reference else None
+    r["chrf_first"] = (strip_markup(reference), " ".join(x.get("translation", "") for x in r["sentences"])) \
+        if reference else None
     r["slowQuit"] = os.path.exists(quit_sample)
     r["exited"] = exited
     r["startup"] = None if listening_at is None else listening_at - launched
@@ -214,10 +217,20 @@ def run_passage(name, text, args, workdir):
 
 def parse(log):
     live = [int(m) for m in re.findall(r"\] LIVE +(\d+)ms", log)]
-    sentences = [json.loads(m) for m in re.findall(r"\] SENTENCE (\{.*\})", log)]
+    sentences = [dict(json.loads(m), at=float(t)) for t, m in re.findall(r"^\[ *([\d.]+)\] SENTENCE (\{.*\})$", log, re.M)]
     accepted = len(re.findall(r"\] REVISE .*accept\(", log))
     evaluated = len(re.findall(r"\] REVISE +\d+ms", log))
     turns = [(int(ms), reason) for ms, reason in re.findall(r"\] TURN end .*\(\+(\d+) ms\) p=\S+ (\w+)", log)]
+    # A second-pass revision replaces its sentence's caption ("final": what the screen ends up showing).
+    for s in sentences:
+        s["final"] = s.get("translation", "")
+    for t, m in re.findall(r"^\[ *([\d.]+)\] REVISED (\{.*\})$", log, re.M):
+        revised = json.loads(m)
+        for s in reversed(sentences):
+            if s["source"] == revised["source"]:
+                s["final"] = revised["translation"]
+                s["revisedAfterMs"] = int((float(t) - s["at"]) * 1000)
+                break
     return {"live": live, "sentences": sentences, "revised": accepted, "reviewed": evaluated, "turns": turns}
 
 
@@ -346,10 +359,12 @@ def summarize(name, r):
             f"first {mean('firstOutputMs'):5.0f} ms (from speech start {mean('firstOutputAfterSpeechStartMs'):5.0f}) | finish {mean('finishAfterCompleteMs'):5.0f} ms | "
             f"after speech {mean('finishAfterSpeechMs'):5.0f} ms | turn +{turn_ms:4.0f} ms ({by_model}/{len(turns)} model) | "
             f"NE {mean('normalizedErasure'):.2f} (committed {mean('committedErasure'):.2f}) | "
-            f"replaced {replaced}/{len(s)} | revised {r['revised']}/{r['reviewed']} | "
+            f"replaced {replaced}/{len(s)} | revised {r['revised']}/{r['reviewed']}"
+            + (f" ({mean('revisedAfterMs') / 1000:.1f} s later)" if any("revisedAfterMs" in x for x in s) else "") + " | "
             f"{r['recognition'][2]} {r['recognition'][0]:.1%}" + (f" (CER {r['cer'][0]:.1%})" if r.get("cer") and
                                                                   r["recognition"][2] != "CER" else "") +
-            (f" | chrF {chrf(*r['chrf']):.1f}" if r.get("chrf") else ""))
+            (f" | chrF {chrf(*r['chrf']):.1f}" if r.get("chrf") else "") +
+            (f" (first pass {chrf(*r['chrf_first']):.1f})" if r.get("chrf_first") and r["chrf_first"] != r["chrf"] else ""))
 
 
 MODELS = os.path.expanduser("~/Library/Application Support/Universal Translator/Models")
@@ -357,9 +372,10 @@ LANGUAGE_NAMES = {"en": "English", "ja": "Japanese", "zh": "Chinese", "ko": "Kor
 
 
 def script_only(args):
-    """chrF of the scripts themselves translated by Hy-MT2 1.8B through llm-bench, one sentence at a time, without
+    """chrF of the scripts themselves translated by Hy-MT2 (1.8B, or --script-model) through llm-bench, one sentence at a time, without
     speech or context: how much of the score is the translation model's own."""
-    model = os.path.join(MODELS, "Hy-MT2-1.8B-Q4_K_M.gguf" if args.engine == "llamaCpp" else "hy-mt2-1.8b-8bit-mlx")
+    model = args.script_model or os.path.join(MODELS, "Hy-MT2-1.8B-Q4_K_M.gguf" if args.engine == "llamaCpp"
+                                              else "hy-mt2-1.8b-8bit-mlx")
     target = args.target.split("-")[0]
     references, translations = [], []
     with tempfile.TemporaryDirectory() as workdir:
@@ -398,6 +414,8 @@ def main():
     p.add_argument("--keep-logs", metavar="DIR", help="copy each passage's debug log here")
     p.add_argument("--script-only", metavar="LLM_BENCH", help="no app, no speech: translate the scripts with this "
                    "llm-bench binary (swift build --product llm-bench) and score them")
+    p.add_argument("--script-model", metavar="PATH", help="with --script-only: this model instead of Hy-MT2 1.8B "
+                   "(e.g. the 7B second-pass model's .gguf)")
     args = p.parse_args()
     args.target = args.target or ("ja" if args.source.startswith("en") else "en")
     args.voice = args.voice or SOURCES[args.source][0]
@@ -410,7 +428,7 @@ def main():
     print(f"source={args.source} voice={args.voice} target={args.target} live={args.live} revision={args.revision} engine={args.engine} stability={args.stability} "
           f"vad={args.vad} turn={args.turn} recognizer={args.recognizer}")
     all_live, all_sentences, all_turns, revised, reviewed = [], [], [], 0, 0
-    errors, ref_units, char_errors, ref_chars, references, translations = 0.0, 0, 0.0, 0, [], []
+    errors, ref_units, char_errors, ref_chars, references, translations, first = 0.0, 0, 0.0, 0, [], [], []
     with tempfile.TemporaryDirectory() as workdir:
         for name in names:
             r = run_passage(name, SOURCES[args.source][1][name], args, workdir)
@@ -426,13 +444,15 @@ def main():
             if r["chrf"]:
                 references.append(r["chrf"][0])
                 translations.append(r["chrf"][1])
+                first.append(r["chrf_first"][1])
             revised += r["revised"]
             reviewed += r["reviewed"]
     print(summarize("overall", {"live": [0] + all_live, "sentences": all_sentences, "revised": revised,
                                 "reviewed": reviewed, "turns": all_turns,
                                 "recognition": (errors / max(1, ref_units), ref_units, r["recognition"][2]),
                                 "cer": (char_errors / max(1, ref_chars), ref_chars) if ref_chars else None,
-                                "chrf": (" ".join(references), " ".join(translations)) if references else None}))
+                                "chrf": (" ".join(references), " ".join(translations)) if references else None,
+                                "chrf_first": (" ".join(references), " ".join(first)) if references else None}))
     subprocess.run(["defaults", "delete", SUITE], capture_output=True)
 
 

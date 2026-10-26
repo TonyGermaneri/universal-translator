@@ -14,6 +14,7 @@ checks behind the macOS 15 port and the Dock icon.
   to_english_llamacpp  Japanese, Chinese and Korean speech (Kyoko, Tingting, Yuna) to English captions on llama.cpp:
                    recognition error, chrF against the reference English, caption lag (limits in TO_ENGLISH)
   to_english_mlx   the same on MLX
+  second_pass      Japanese speech with the Hy-MT2 7B second pass: captions revised, English no worse than before
   system_audio     a tapped process (UT_TAP_PID), launched with `open` so the app asks for its own permission
   mic              the real microphone hearing speech the Mac says aloud (only with --speaker: it plays out loud)
 
@@ -602,6 +603,41 @@ def test_to_english_mlx(work, args):
     return to_english("mlx", work, args)
 
 
+# The second pass (Hy-MT2 7B on llama.cpp) revising Japanese → English captions during pauses. Measured 2026-10-26
+# (M4, all four passages): chrF 62.1 first pass → 64.6 revised, 7 of 14 checked captions revised, a median 2.8 s
+# after they first showed; live captions unchanged. On meeting + questions: 53.0 → 56.7, 6 revised.
+SECOND_PASS_PASSAGES = ["meeting", "questions"]
+SECOND_PASS_CHRF = 50
+
+
+def test_second_pass(work, args):
+    """Japanese speech with the 7B second pass: it runs, revises some captions, and the English as finally shown is
+    at least as close to the reference as the first pass was."""
+    require_models(("Nemotron (all languages)", "nemotron-asr-multilingual-560ms"), *list(NEEDED.items())[1:],
+                   LIVE["llamaCpp"], ("Hy-MT2 7B", "Hy-MT2-7B-Q4_K_M.gguf"))
+    logs = os.path.join(work, "second-pass")
+    cmd = [sys.executable, "-I", os.path.join(ROOT, "scripts", "evaluate.py"), "--revision", "localLLMLarge",
+           "--engine", "llamaCpp", "--source", "ja-JP", "--keep-logs", logs]
+    for p in SECOND_PASS_PASSAGES:
+        cmd += ["--passage", p]
+    subprocess.run(cmd, check=True, capture_output=True)
+    references, first, final, revised = [], [], [], 0
+    for p in SECOND_PASS_PASSAGES:
+        r = checked_passage("llamaCpp", logs, p, evaluate.JA[p], "ja-JP")
+        log = open(os.path.join(logs, f"{p}.log"), encoding="utf-8").read()
+        assert "LLM hy-mt2-7b-q4 " in log, f"{p}: the 7B didn't translate anything"
+        references.append(evaluate.strip_markup(evaluate.PASSAGES[p]))
+        first.append(" ".join(s["translation"] for s in r["sentences"]))
+        final.append(" ".join(s["final"] for s in r["sentences"]))
+        revised += sum(1 for s in r["sentences"] if "revisedAfterMs" in s)
+    before = evaluate.chrf(" ".join(references), " ".join(first))
+    after = evaluate.chrf(" ".join(references), " ".join(final))
+    assert revised > 0, "no caption was revised"
+    assert after >= before, f"revisions made the English worse: chrF {before:.1f} → {after:.1f}"
+    assert after >= SECOND_PASS_CHRF, f"revised English chrF {after:.1f} (floor {SECOND_PASS_CHRF})"
+    return f"{revised} captions revised, chrF {before:.1f} → {after:.1f}"
+
+
 def test_engine_llamacpp(work, args):
     return engine("llamaCpp", work, args)
 
@@ -664,7 +700,7 @@ TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay
          ("stall_capture", test_stall_capture), ("transcript", test_transcript),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("to_english_llamacpp", test_to_english_llamacpp),
-         ("to_english_mlx", test_to_english_mlx), ("system_audio", test_system_audio), ("mic", test_mic)]
+         ("to_english_mlx", test_to_english_mlx), ("second_pass", test_second_pass), ("system_audio", test_system_audio), ("mic", test_mic)]
 
 
 def main():

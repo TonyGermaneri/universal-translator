@@ -327,6 +327,11 @@ final class LiveTranslationController {
                                   current.committed, candidate))
             if case .accept(let changed) = decision {
                 captions.revise(job.id, translation: candidate, changed: changed)
+                // For scripts/evaluate.py: the caption as revised, matched to its SENTENCE line by source.
+                let fields = ["source": job.sentence.source, "translation": candidate]
+                if let json = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) {
+                    DebugLog.write("REVISED " + String(decoding: json, as: UTF8.self))
+                }
                 policy.replaceHistory(source: job.sentence.source, translation: candidate, correctedSource: job.finalSource)
             }
         }
