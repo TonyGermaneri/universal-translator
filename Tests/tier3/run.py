@@ -373,7 +373,30 @@ def test_stall_capture(work, args):
     os.makedirs(unsampled)
     shutil.copy(os.path.join(opts.keep_logs, "stuck.log"), unsampled)
     assert stalled_run(unsampled, "stuck", "Hello there.", log) is None, "a log that never went quiet counts as a stall"
-    return "a quiet log and a slow quit are both sampled; the stuck app is killed; only a quiet log is a stall"
+
+    # A stall near the end of a passage (seen 2026-10-26, Japanese "meeting", 30 s in) left less than the end-of-run
+    # check's 10 s of quiet: it's sampled while the passage is still being spoken. Stand-in: starts listening, logs
+    # for 4 s, then goes quiet (and quits normally).
+    quiet = os.path.join(work, "quiet-app")
+    with open(quiet, "w") as f:
+        f.write("#!/bin/bash\necho '[   0.10] ENDPOINT vad=silero turn=smart-turn' >> \"$UT_DEBUG_LOG\"\n"
+                "for i in 1 2 3 4 5 6 7 8; do echo \"[ $i] volatile\" >> \"$UT_DEBUG_LOG\"; sleep 0.5; done\n"
+                "while true; do sleep 1; done\n")
+    os.chmod(quiet, 0o755)
+    opts.tail, opts.keep_logs = 1.0, None
+    text = "Hello there. [[slnc 9000]] Goodbye."
+    evaluate.APP, started = quiet, time.time()
+    try:
+        evaluate.run_passage("quiet", text, opts, work)
+    finally:
+        evaluate.APP = real
+    sample = os.path.join(work, "quiet.sample.txt")
+    assert os.path.exists(sample), "a log that went quiet mid-passage wasn't sampled"
+    # About 13.5 s of audio: sampled during it, not by the end-of-run check (from 14.5 s, then 3 s of sampling).
+    assert os.path.getmtime(sample) - started < 13.5, \
+        f"sampled only at the end ({os.path.getmtime(sample) - started:.1f} s after launch)"
+    return ("a quiet log and a slow quit are both sampled; the stuck app is killed; only a quiet log is a stall; "
+            "a stall mid-passage is sampled while it's spoken")
 
 
 def test_transcript(work, args):
@@ -478,20 +501,21 @@ def engine(engine_name, work, args):
 
 # Speech in Japanese, Chinese and Korean captioned in English: the direction the app was built for, and what the
 # org's managers need (scripts/evaluate.py's passages, scored against the English ones). Limits per passage (--quick
-# runs only the meeting), a margin beyond the first measurement (2026-10-25, M4, llama.cpp / MLX):
-#   meeting    ja CER 5.8 %, chrF 44.0/45.2, first caption 4.5/4.6 s after the speaker starts, final 0.54/0.63 s
-#              after speech ends; zh CER 0.8 %, 46.6/45.5, 2.9/3.0 s, 0.44/0.52 s; ko WER 17.4 % (CER 0.6 %),
-#              47.1/48.0, 2.3/2.3 s, 0.41/0.47 s
-#   monologue  ja CER 0 %, chrF 62.3/62.6, 31.2/31.8 s, 1.5/2.1 s; zh CER 0 %, 68.7/65.2, 5.2/5.2 s, 0.58/0.71 s;
-#              ko WER 4.2 % (CER 0 %), 51.5/52.7, 6.0/6.0 s, 0.34/0.34 s
-# Japanese and Chinese get no caption until an utterance ends (the Japanese monologue is one 30 s utterance), so
-# their lag limits hold today's behavior: tighten them when that improves. Korean's WER mostly counts spacing
+# runs only the meeting), a margin beyond the measurement of 2026-10-26 (M4, llama.cpp / MLX), after Japanese and
+# Chinese were split into words and all three began waiting for clauses (SourceFrontier.waitsForClauses):
+#   meeting    ja CER 5.8 % (2.6 % in other runs), chrF 43.1/45.0, first caption 3.2/3.3 s after the speaker starts,
+#              final 0.44/0.60 s after speech ends; zh CER 0.8 %, 47.1/45.5, 2.9/3.0 s, 0.46/0.53 s; ko WER 17.4 %
+#              (CER 0.6 %), 51.0/51.7, 3.7/3.9 s, 0.52/0.66 s
+#   monologue  ja CER 0 %, chrF 59.8/64.4, 8.1/8.3 s (31 s before: no caption until the utterance ended),
+#              0.60/0.76 s; zh CER 0 %, 68.7/65.2, 5.1/5.3 s, 0.59/0.72 s; ko WER 4.2 % (CER 0 %), 59.9/58.2,
+#              10.2/10.3 s (no commas: it waits for the 16-word fallback), 0.60/0.73 s
+# chrF varies by about 4 between identical runs (recognition does). Korean's WER mostly counts spacing
 # (참여해 주셔서 / 참여해주셔서), so its CER is limited too. zh-TW isn't here: Nemotron's zh-TW prompt writes only
 # <unk> (CER 490 %), while the same Taiwanese voice with zh-CN gets 1.6 %.
 TO_ENGLISH = {  # locale: {passage: (recognition error limit, chrF floor, first-caption lag ms, after-speech ms)}
-    "ja-JP": {"meeting": (0.08, 38, 5500, 1000), "monologue": (0.03, 55, 34000, 3000)},
+    "ja-JP": {"meeting": (0.08, 38, 4200, 1000), "monologue": (0.03, 56, 10000, 1200)},
     "zh-CN": {"meeting": (0.03, 40, 3700, 900), "monologue": (0.03, 58, 6200, 1100)},
-    "ko-KR": {"meeting": (0.22, 41, 3000, 900), "monologue": (0.08, 45, 7000, 800)},
+    "ko-KR": {"meeting": (0.22, 45, 4700, 1000), "monologue": (0.08, 52, 12000, 1100)},
 }
 TO_ENGLISH_KO_CER = 0.03
 

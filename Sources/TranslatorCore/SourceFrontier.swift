@@ -15,12 +15,31 @@ public struct SourceFrontier: Sendable {
     /// Utterances longer than this are finished early (at the edge of the stable words) so translation
     /// and context keep flowing during long monologues.
     public var maxSentenceWords: Int
+    /// Hand over stable words only up to the last clause boundary (、。，, and the like), the way an interpreter
+    /// waits for the clause: in a language that puts the verb last, English made from half a clause is often wrong
+    /// and then can't be taken back ("会議にご参加いただき…" → "Please attend the meeting"). See `waitsForClauses(in:)`.
+    public var clauseGated: Bool
+    /// With `clauseGated`, words after the last boundary are handed over anyway once there are this many, so a
+    /// speaker who doesn't pause for commas still gets captions.
+    public var clauseFallbackWords: Int
     private var firstSeen: [String: Double] = [:]
 
-    public init(holdBack: Double = 0.25, maxSentenceWords: Int = 40) {
+    public init(holdBack: Double = 0.25, maxSentenceWords: Int = 40, clauseGated: Bool = false,
+                clauseFallbackWords: Int = 16) {
         self.holdBack = holdBack
         self.maxSentenceWords = maxSentenceWords
+        self.clauseGated = clauseGated
+        self.clauseFallbackWords = clauseFallbackWords
     }
+
+    /// Speech languages whose live captions wait for each clause. Measured 2026-10-26 with scripts/evaluate.py
+    /// (llama.cpp, chrF): Japanese 56.1 word by word, 60.0 by clause; Chinese 58.2 and 62.8; Korean 59.1 and 64.4, for
+    /// about 2 s more lag (its run-on monologue, without commas, waits for the 16-word fallback: 10 s).
+    public static func waitsForClauses(in locale: String) -> Bool {
+        ["ja", "zh", "ko"].contains(locale.split(separator: "-").first.map { $0.lowercased() } ?? "")
+    }
+
+    static let clauseEnders: Set<Character> = Set("、。，,！？!?；;：:")
 
     /// How the end of the speaker's turn delimits the utterance.
     public enum UtteranceEnd: Equatable, Sendable {
@@ -65,13 +84,22 @@ public struct SourceFrontier: Sendable {
         case nil:
             break
         }
-        let stable = Array(pending.prefix(ready))
+        var stable = Array(pending.prefix(ready))
+        if clauseGated { stable = clausePrefix(stable) }
         // A long monologue without pauses: finish what's stable. Everything committed so far translates
         // words inside this stable prefix, so finishing exactly here never contradicts the screen.
         if TextJoiner.wordCount(stable.map(\.text).joined()) >= maxSentenceWords {
             return Sentence(tokens: stable, isComplete: true, isCut: true)
         }
         return Sentence(tokens: stable, isComplete: false)
+    }
+
+    /// The stable words up to the last clause boundary, or all of them once the rest is `clauseFallbackWords` long.
+    func clausePrefix(_ stable: [Token]) -> [Token] {
+        let boundary = stable.lastIndex { $0.trimmed.last.map(Self.clauseEnders.contains) ?? false }
+        let rest = stable[(boundary.map { $0 + 1 } ?? 0)...]
+        if TextJoiner.wordCount(rest.map(\.text).joined()) >= clauseFallbackWords { return stable }
+        return boundary.map { Array(stable[...$0]) } ?? []
     }
 
     /// Leading tokens that are final, or agreed and old enough.

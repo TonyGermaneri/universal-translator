@@ -92,7 +92,7 @@ final class SpeechPipeline: SpeechEngine {
         endpointer = Endpointer(sensitivity: s.micSensitivity, timing: s.timing, vad: vad, turnModel: turnModel)
 
         transcript.reset()
-        frontier = SourceFrontier()
+        frontier = SourceFrontier(clauseGated: SourceFrontier.waitsForClauses(in: s.sourceLocale))
         applyTiming(s.timing)
         boundary = nil
         handledTurnEnd = -1
@@ -172,7 +172,8 @@ final class SpeechPipeline: SpeechEngine {
     private func handle(_ result: RecognizerResult) {
         lastResultAt = ProcessInfo.processInfo.systemUptime
         let tokens = Tokenizer.tokens(from: result.pieces, isFinal: result.isFinal,
-                                      fallbackStart: result.start, fallbackEnd: result.end)
+                                      fallbackStart: result.start, fallbackEnd: result.end,
+                                      locale: settings.settings.sourceLocale)
         DebugLog.write(String(format: "%@ %.2f-%.2f now=%.2f | %@", result.isFinal ? "FINAL   " : "volatile", result.start,
                               result.end, latest.time, result.text))
         if result.isFinal {

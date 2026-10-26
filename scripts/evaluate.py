@@ -155,10 +155,22 @@ def run_passage(name, text, args, workdir):
     subprocess.run(["defaults", "import", SUITE, "-"], input=plistlib.dumps(defaults_for(args)), check=True)
     env = dict(os.environ, UT_DEFAULTS_SUITE=SUITE, UT_AUDIO_FILE=audio, UT_DEBUG_LOG=log, UT_AUTOSTART="1")
     proc = subprocess.Popen([APP], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(duration + args.tail)
-    # The app stopped logging well before the end (seen with llama.cpp, no crash): record what it's doing.
+    # The app stopped logging well before the end (seen with llama.cpp, no crash): record what it's doing. While the
+    # passage is being spoken the log never rests for long, so 5 s of quiet then is a stall; caught only at the end
+    # (10 s quiet), one in the last seconds of a passage went unrecorded (2026-10-26, Japanese "meeting").
     sample = os.path.join(workdir, f"{name}.sample.txt")
-    if os.path.exists(log) and time.time() - os.path.getmtime(log) > 10 and proc.poll() is None:
+    deadline, listening_at = time.time() + duration + args.tail, None
+    while time.time() < deadline:
+        time.sleep(0.5)
+        if not os.path.exists(log) or os.path.exists(sample) or proc.poll() is not None:
+            continue
+        if listening_at is None and "ENDPOINT" in open(log, encoding="utf-8", errors="replace").read():
+            listening_at = time.time()
+        speaking = listening_at is not None and time.time() < listening_at + duration - 2.5
+        if speaking and time.time() - os.path.getmtime(log) > 5:
+            subprocess.run(["sample", str(proc.pid), "3", "-file", sample], capture_output=True)
+    if not os.path.exists(sample) and os.path.exists(log) and time.time() - os.path.getmtime(log) > 10 \
+            and proc.poll() is None:
         subprocess.run(["sample", str(proc.pid), "3", "-file", sample], capture_output=True)
     proc.terminate()
     # Seen 2026-10-24 (llama.cpp, while a build ran): the app took over 10 s to quit. Record what it was doing.

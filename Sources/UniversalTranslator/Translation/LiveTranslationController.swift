@@ -220,6 +220,10 @@ final class LiveTranslationController {
             }
             guard gen == generation else { return }
             if policy.profile.unit == .character { hypothesis = TextJoiner.normalizeSpacelessSpacing(hypothesis) }
+            let echoed = hypothesis
+            hypothesis = ContextEcho.strip(hypothesis, source: request.source, context: context, prefix: request.prefix,
+                                           isFinal: request.isFinal)
+            if hypothesis != echoed { DebugLog.write("ECHO stripped | " + echoed) }
             DebugLog.write(String(format: "LIVE %4.0fms %@ | %@ → %@", (now - started) * 1000,
                                   request.isFinal ? "final" : "     ", request.source, hypothesis))
             inFlight = nil
@@ -390,7 +394,7 @@ struct SentenceMetrics {
         let fields: [String: Any] = [
             "source": source,
             "translation": translation,
-            "words": source.split(separator: " ").count,
+            "words": TextJoiner.wordCount(source),
             "firstOutputMs": ms(firstSourceAt, firstOutputAt),
             "firstOutputAfterSpeechStartMs": ms(speechStartedAt, firstOutputAt),
             "finishAfterCompleteMs": ms(completedAt, finishedAt),
