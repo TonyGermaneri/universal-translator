@@ -65,7 +65,7 @@ final class NemotronRecognizer: SpeechRecognizer {
         let manager = StreamingNemotronMultilingualAsrManager()
         let shared = try await StreamingNemotronMultilingualAsrManager.preloadShared(from: directory)
         try await manager.loadFromShared(shared)
-        await manager.setLanguage(Locale(identifier: identifier).identifier(.bcp47))
+        await manager.setLanguage(Self.modelLanguage(identifier))
         if !contextualStrings.isEmpty {
             await manager.setCustomVocabulary(contextualStrings.prefix(100).map { CustomVocabularyTerm(text: $0) })
         }
@@ -80,11 +80,32 @@ final class NemotronRecognizer: SpeechRecognizer {
         let fail: @Sendable (Error) -> Void = { [weak self] error in
             Task { @MainActor in self?.onError?(error) }
         }
-        let deferTurnEnds = Self.defersTurnEnds(identifier)
+        let deferTurnEnds = Self.defersTurnEnds(identifier), traditional = Self.writesTraditional(identifier)
         worker = Task.detached(priority: .userInitiated) {
             await Self.run(manager: manager, items: stream, locale: identifier, deferTurnEnds: deferTurnEnds,
+                           traditional: traditional,
                            emit: deliver, failed: fail)
         }
+    }
+
+    /// The language prompt Nemotron is given. Its zh-TW prompt writes nothing but `<unk>` (CER 490 % on Taiwanese
+    /// speech, 2026-10-25), while the zh-CN prompt recognizes the same Taiwanese voice at CER 1.6 %: Chinese written in
+    /// Traditional characters is recognized as Mandarin and converted (`writesTraditional`).
+    nonisolated static func modelLanguage(_ locale: String) -> String {
+        writesTraditional(locale) ? "zh-CN" : Locale(identifier: locale).identifier(.bcp47)
+    }
+
+    /// Chinese read in Traditional characters: Taiwan, Hong Kong, Macau (Foundation infers their Hant script), or an
+    /// explicit Hant script.
+    nonisolated static func writesTraditional(_ locale: String) -> Bool {
+        let language = Locale(identifier: locale).language
+        return language.languageCode?.identifier == "zh" && language.script?.identifier == "Hant"
+    }
+
+    /// Recognized text as shown: in Traditional characters for `writesTraditional` speech (the model writes
+    /// Simplified), character for character, so the text keeps its length.
+    nonisolated static func presented(_ text: String, traditional: Bool) -> String {
+        traditional ? ChineseScript.convert(text, toTraditional: true) : text
     }
 
     /// Speech languages whose turns end on the real audio that follows rather than on silence padding: in Japanese,
@@ -102,7 +123,7 @@ final class NemotronRecognizer: SpeechRecognizer {
     /// token timings decide which characters were spoken before the turn ended (the speaker may already have
     /// resumed); otherwise the chunk is completed with silence at once.
     private nonisolated static func run(manager: StreamingNemotronMultilingualAsrManager, items: AsyncStream<Item>,
-                                        locale: String, deferTurnEnds: Bool, emit: @escaping @Sendable (RecognizerResult) -> Void,
+                                        locale: String, deferTurnEnds: Bool, traditional: Bool, emit: @escaping @Sendable (RecognizerResult) -> Void,
                                         failed: @escaping @Sendable (Error) -> Void) async {
         let chunkSamples = await manager.config.chunkSamples
         var fed = 0.0              // seconds of real audio received
@@ -129,7 +150,8 @@ final class NemotronRecognizer: SpeechRecognizer {
             finalizedTokens = timings.count
             DebugLog.write(String(format: "NEMOTRON turn %.0f ms | %@",
                                   (ProcessInfo.processInfo.systemUptime - started) * 1000, text))
-            emit(RecognizerResult(pieces: pieces ?? [TimedPiece(text: text, start: nil, end: nil)], isFinal: true,
+            emit(RecognizerResult(pieces: pieces ?? [TimedPiece(text: Self.presented(text, traditional: traditional),
+                                                                 start: nil, end: nil)], isFinal: true,
                                   start: turnStart, end: fed, endOfSpeech: endOfSpeech))
             turnStart = fed
             partial = ""
@@ -147,7 +169,8 @@ final class NemotronRecognizer: SpeechRecognizer {
                         pendingEnd = nil
                         await finishTurn(endOfSpeech: end.endOfSpeech, since: end.since, timed: true)
                     }
-                    let text = Self.turnText(String(await manager.getPartialTranscript().dropFirst(finalized)))
+                    let text = Self.presented(Self.turnText(String(await manager.getPartialTranscript().dropFirst(finalized))),
+                                              traditional: traditional)
                     if text != partial {
                         partial = text
                         emit(RecognizerResult(pieces: [TimedPiece(text: text, start: nil, end: nil)], isFinal: false,
@@ -185,7 +208,7 @@ final class NemotronRecognizer: SpeechRecognizer {
                     await finishTurn(endOfSpeech: end.endOfSpeech, since: end.since, timed: false)
                 case .reset:
                     let all = try await manager.finish()
-                    let rest = Self.turnText(String(all.dropFirst(finalized)))
+                    let rest = Self.presented(Self.turnText(String(all.dropFirst(finalized))), traditional: traditional)
                     if !rest.trimmingCharacters(in: .whitespaces).isEmpty {
                         emit(RecognizerResult(pieces: [TimedPiece(text: rest, start: nil, end: nil)], isFinal: true,
                                               start: turnStart, end: fed))

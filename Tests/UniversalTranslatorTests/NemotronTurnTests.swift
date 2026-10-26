@@ -57,3 +57,25 @@ import TranslatorCore
                                     now: 5).text != "一番近い駅は")
     }
 }
+
+/// Chinese read in Traditional characters: Nemotron's zh-TW prompt wrote nothing but `<unk>` (CER 490 % on Taiwanese
+/// speech, 2026-10-25), so it's recognized with the zh-CN prompt and shown converted.
+@Suite struct NemotronLanguageTests {
+    @Test func traditionalChineseIsRecognizedAsMandarin() {
+        for locale in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant-TW", "zh-Hant"] {
+            #expect(NemotronRecognizer.modelLanguage(locale) == "zh-CN", "\(locale)")
+            #expect(NemotronRecognizer.writesTraditional(locale), "\(locale)")
+        }
+        for (locale, prompt) in [("zh-CN", "zh-CN"), ("ja-JP", "ja-JP"), ("ko-KR", "ko-KR"), ("en-US", "en-US")] {
+            #expect(NemotronRecognizer.modelLanguage(locale) == prompt)
+            #expect(!NemotronRecognizer.writesTraditional(locale), "\(locale)")
+        }
+        #expect(!NemotronRecognizer.writesTraditional("zh-Hans-HK"))
+    }
+
+    @Test func recognizedTextIsShownInTraditionalCharacters() {
+        #expect(NemotronRecognizer.presented("感谢各位参加这次电话会议", traditional: true) == "感謝各位參加這次電話會議")
+        #expect(NemotronRecognizer.presented("感谢各位", traditional: false) == "感谢各位")
+        #expect(NemotronRecognizer.presented("Mac 用", traditional: true) == "Mac 用")
+    }
+}

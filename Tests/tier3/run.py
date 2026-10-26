@@ -11,7 +11,7 @@ checks behind the macOS 15 port and the Dock icon.
   model_import     hand-downloaded models (copies of the real ones) are checked and installed; a corrupt one isn't
   engine_llamacpp  Nemotron + Silero VAD + Smart Turn + Hy-MT2 1.8B (llama.cpp), scripts/evaluate.py's passages
   engine_mlx       the same with Hy-MT2 1.8B on MLX
-  to_english_llamacpp  Japanese, Chinese and Korean speech (Kyoko, Tingting, Yuna) to English captions on llama.cpp:
+  to_english_llamacpp  Japanese, Chinese and Korean speech (Kyoko, Tingting, Meijia, Yuna) to English captions on llama.cpp:
                    recognition error, chrF against the reference English, caption lag (limits in TO_ENGLISH)
   to_english_mlx   the same on MLX
   second_pass      Japanese speech with the Hy-MT2 7B second pass: captions revised, English no worse than before
@@ -530,11 +530,14 @@ def engine(engine_name, work, args):
 #              0.60/0.76 s; zh CER 0 %, 68.7/65.2, 5.1/5.3 s, 0.59/0.72 s; ko WER 4.2 % (CER 0 %), 59.9/58.2,
 #              10.2/10.3 s (no commas: it waits for the 16-word fallback), 0.60/0.73 s
 # chrF varies by about 4 between identical runs (recognition does). Korean's WER mostly counts spacing
-# (참여해 주셔서 / 참여해주셔서), so its CER is limited too. zh-TW isn't here: Nemotron's zh-TW prompt writes only
-# <unk> (CER 490 %), while the same Taiwanese voice with zh-CN gets 1.6 %.
+# (참여해 주셔서 / 참여해주셔서), so its CER is limited too. zh-TW (Meijia) is recognized with Nemotron's zh-CN prompt
+# and shown in Traditional characters (its own zh-TW prompt wrote only <unk>, CER 490 %): meeting CER 5.9 %, chrF
+# 46.4/47.4, 2.8/2.9 s, 0.44/0.56 s; monologue CER 0 %, 57.1/59.2, 5.2/5.3 s, 0.60/0.74 s (2026-10-26; its errors are
+# Taiwanese words: 快取 → 快曲, 伺服器 → 四服器, 和 heard as 漢).
 TO_ENGLISH = {  # locale: {passage: (recognition error limit, chrF floor, first-caption lag ms, after-speech ms)}
     "ja-JP": {"meeting": (0.08, 38, 4200, 1000), "monologue": (0.03, 56, 10000, 1200)},
     "zh-CN": {"meeting": (0.03, 40, 3700, 900), "monologue": (0.03, 58, 6200, 1100)},
+    "zh-TW": {"meeting": (0.09, 40, 3700, 900), "monologue": (0.04, 52, 6200, 1100)},
     "ko-KR": {"meeting": (0.22, 45, 4700, 1000), "monologue": (0.08, 52, 12000, 1100)},
 }
 TO_ENGLISH_KO_CER = 0.03
