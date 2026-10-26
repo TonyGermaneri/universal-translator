@@ -157,15 +157,27 @@ def run_passage(name, text, args, workdir):
     proc = subprocess.Popen([APP], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # The app stopped logging well before the end (seen with llama.cpp, no crash): record what it's doing. While the
     # passage is being spoken the log never rests for long, so 5 s of quiet then is a stall; caught only at the end
-    # (10 s quiet), one in the last seconds of a passage went unrecorded (2026-10-26, Japanese "meeting").
+    # (10 s quiet), one in a passage's last 10 s would go unrecorded.
     sample = os.path.join(workdir, f"{name}.sample.txt")
-    deadline, listening_at = time.time() + duration + args.tail, None
+    launched = time.time()
+    # The passage plays from when the app starts listening (ENDPOINT), not from launch. Seen 2026-10-26: a first launch
+    # from a new folder took about 12 s to start, and stopping the app at launch + duration cut off the passage's last
+    # 12 s, which looked like the app had stalled (likely the occasional stall seen on a first passage).
+    deadline, listening_at, exited = launched + 90, None, None
     while time.time() < deadline:
         time.sleep(0.5)
+        if exited is None and proc.poll() is not None:
+            exited = (time.time() - launched, proc.returncode)
+            print(f"{name}: the app exited on its own {exited[0]:.0f} s after launch (status {exited[1]})",
+                  file=sys.stderr)
+        if listening_at is None and os.path.exists(log) and \
+                "ENDPOINT" in open(log, encoding="utf-8", errors="replace").read():
+            listening_at = time.time()
+            deadline = listening_at + duration + args.tail
+            if listening_at - launched > 5:
+                print(f"{name}: slow start, listening {listening_at - launched:.0f} s after launch", file=sys.stderr)
         if not os.path.exists(log) or os.path.exists(sample) or proc.poll() is not None:
             continue
-        if listening_at is None and "ENDPOINT" in open(log, encoding="utf-8", errors="replace").read():
-            listening_at = time.time()
         speaking = listening_at is not None and time.time() < listening_at + duration - 2.5
         if speaking and time.time() - os.path.getmtime(log) > 5:
             subprocess.run(["sample", str(proc.pid), "3", "-file", sample], capture_output=True)
@@ -195,6 +207,8 @@ def run_passage(name, text, args, workdir):
     reference = REFERENCES.get(args.target.split("-")[0], {}).get(name)
     r["chrf"] = (strip_markup(reference), " ".join(x.get("translation", "") for x in r["sentences"])) if reference else None
     r["slowQuit"] = os.path.exists(quit_sample)
+    r["exited"] = exited
+    r["startup"] = None if listening_at is None else listening_at - launched
     return r
 
 

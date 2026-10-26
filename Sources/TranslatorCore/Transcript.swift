@@ -82,7 +82,7 @@ public enum Tokenizer {
     }
 
     /// "  hello world," -> ["  hello", " world,"]. Whitespace-only input yields no words.
-    static func splitKeepingLeadingSpace(_ s: String) -> [String] {
+    public static func splitKeepingLeadingSpace(_ s: String) -> [String] {
         var result: [String] = []
         var current = ""
         var sawNonSpace = false
@@ -106,7 +106,7 @@ public enum Tokenizer {
     /// "皆さん、おはようございます" -> ["皆さん、", "おはよう", "ござい", "ます"]: words of a spaceless script, each
     /// keeping the punctuation after it (and the first, any whitespace before it), so they re-join losslessly.
     /// Text without such characters is returned as it is.
-    static func splitSpaceless(_ word: String, locale: String?) -> [String] {
+    public static func splitSpaceless(_ word: String, locale: String?) -> [String] {
         guard word.unicodeScalars.contains(where: TextJoiner.isSpacelessScript) else { return [word] }
         let ns = word as NSString
         let language = locale.map { Locale(identifier: $0) } ?? Locale(identifier: guessedLanguage(word))

@@ -351,7 +351,8 @@ def test_stall_capture(work, args):
     doesn't quit when asked, then kills it. Checked with a stand-in app that logs once, then ignores everything."""
     fake = os.path.join(work, "stuck-app")
     with open(fake, "w") as f:
-        f.write("#!/bin/bash\ntrap '' TERM\necho '[   0.50] started' >> \"$UT_DEBUG_LOG\"\nwhile true; do sleep 1; done\n")
+        f.write("#!/bin/bash\ntrap '' TERM\necho '[   0.50] ENDPOINT vad=silero turn=smart-turn' >> \"$UT_DEBUG_LOG\"\n"
+                "while true; do sleep 1; done\n")
     os.chmod(fake, 0o755)
     opts = argparse.Namespace(source="en-US", voice="Samantha", tail=9.0, keep_logs=os.path.join(work, "stuck"), target="ja",
                               live="localLLM", revision="off", engine="llamaCpp", stability=0.5, vad="silero", turn="on",
@@ -374,7 +375,7 @@ def test_stall_capture(work, args):
     shutil.copy(os.path.join(opts.keep_logs, "stuck.log"), unsampled)
     assert stalled_run(unsampled, "stuck", "Hello there.", log) is None, "a log that never went quiet counts as a stall"
 
-    # A stall near the end of a passage (seen 2026-10-26, Japanese "meeting", 30 s in) left less than the end-of-run
+    # A stall in the last 10 s of a passage would leave less than the end-of-run
     # check's 10 s of quiet: it's sampled while the passage is still being spoken. Stand-in: starts listening, logs
     # for 4 s, then goes quiet (and quits normally).
     quiet = os.path.join(work, "quiet-app")
@@ -395,8 +396,26 @@ def test_stall_capture(work, args):
     # About 13.5 s of audio: sampled during it, not by the end-of-run check (from 14.5 s, then 3 s of sampling).
     assert os.path.getmtime(sample) - started < 13.5, \
         f"sampled only at the end ({os.path.getmtime(sample) - started:.1f} s after launch)"
+
+    # A slow start (seen 2026-10-26: about 12 s on a first launch from a new folder) still gets the whole passage:
+    # stopping the app at launch + duration cut the end off, which looked like a stall. Stand-in: listens after 8 s.
+    slow = os.path.join(work, "slow-app")
+    with open(slow, "w") as f:
+        f.write("#!/bin/bash\nsleep 8\necho '[   0.10] ENDPOINT vad=silero turn=smart-turn' >> \"$UT_DEBUG_LOG\"\n"
+                "while true; do echo '[ 1] volatile' >> \"$UT_DEBUG_LOG\"; sleep 0.5; done\n")
+    os.chmod(slow, 0o755)
+    opts.keep_logs = os.path.join(work, "slow")
+    evaluate.APP = slow
+    try:
+        r = evaluate.run_passage("slow", "Hello there. [[slnc 3000]]", opts, work)
+    finally:
+        evaluate.APP = real
+    slow_log = os.path.join(opts.keep_logs, "slow.log")
+    heard = open(slow_log, encoding="utf-8").read().count("volatile") if os.path.exists(slow_log) else 0
+    assert r["startup"] and r["startup"] >= 7, f"listening didn't start late, or wasn't noticed: {r['startup']}"
+    assert heard >= 10, f"a slow start was cut off: {heard} log lines after it started listening"
     return ("a quiet log and a slow quit are both sampled; the stuck app is killed; only a quiet log is a stall; "
-            "a stall mid-passage is sampled while it's spoken")
+            "a stall mid-passage is sampled while it's spoken; a slow start still gets the whole passage")
 
 
 def test_transcript(work, args):
@@ -518,6 +537,9 @@ TO_ENGLISH = {  # locale: {passage: (recognition error limit, chrF floor, first-
     "ko-KR": {"meeting": (0.22, 45, 4700, 1000), "monologue": (0.08, 52, 12000, 1100)},
 }
 TO_ENGLISH_KO_CER = 0.03
+# Words a turn must start with. Completing a Japanese turn's last chunk with silence cost the next turn its first word
+# (2026-10-26, in every run: 三月の出荷 → の出荷); turns now end on the real audio (NemotronRecognizer.defersTurnEnds).
+TO_ENGLISH_HEARD = {("ja-JP", "meeting"): ["三月の出荷"]}
 
 
 def to_english(engine_name, work, args):
@@ -537,6 +559,8 @@ def to_english(engine_name, work, args):
             if stats["cer"] is not None:
                 assert stats["cer"] <= TO_ENGLISH_KO_CER, \
                     f"{label}: recognition CER {stats['cer']:.1%} (limit {TO_ENGLISH_KO_CER:.0%})"
+            for words in TO_ENGLISH_HEARD.get((locale, p), []):
+                assert evaluate.normalize_chars(locale, words) in stats["heard"], f"{label}: {words} wasn't heard"
             assert chrf >= chrf_floor, f"{label}: English captions chrF {chrf:.1f} against the reference (floor {chrf_floor})"
             assert lag <= lag_limit, \
                 f"{label}: first caption {lag / 1000:.1f} s after the speaker starts (limit {lag_limit / 1000:.1f} s)"
@@ -562,7 +586,10 @@ def to_english_stats(engine_name, logs, passages, locale):
             lags.append(s["firstOutputAfterSpeechStartMs"])
             if s["finishAfterSpeechMs"] >= 0:
                 after.append(s["finishAfterSpeechMs"])
+    heard = "".join(s["source"] for p in passages for s in checked_passage(engine_name, logs, p,
+                                                                             evaluate.SOURCES[locale][1][p], locale)["sentences"])
     return {"error": errors / max(1, units), "measure": measure, "cer": char_errors / chars if chars else None,
+            "heard": evaluate.normalize_chars(locale, heard) if locale[:2] in ("ja", "zh") else heard,
             "chrf": evaluate.chrf(" ".join(references), " ".join(captions)),
             "lag": sum(lags) / len(lags), "after": sum(after) / max(1, len(after))}
 

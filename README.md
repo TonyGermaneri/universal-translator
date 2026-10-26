@@ -163,12 +163,12 @@ M4, `scripts/evaluate.py --source <locale> --revision off`, the same four passag
 | Speech → captions | Recognition error | First caption after the speaker starts | Final caption after speech ends | chrF vs reference | Script alone (`--script-only`, no speech) |
 | --- | --- | --- | --- | --- | --- |
 | English → Japanese | WER 1.2% | 2.0 s | 0.56 s | 50.7 (Japanese characters) | 55.1 |
-| Japanese → English | CER 4.4% | 4.4 s (monologue: 8.1 s) | 0.48 s | 60.0 | 63.3 |
+| Japanese → English | CER 2.9% | 4.3 s (monologue: 8.1 s) | 0.76 s | 62.6 | 63.3 |
 | Chinese (Mainland) → English | CER 1.1% | 3.5 s | 0.47 s | 62.8 | 68.3 |
 | Chinese (Taiwan) → English | broken: `<unk>` only | | | 1.8 | 68.8 |
 | Korean → English | WER 11.2% (CER 0.8%: spacing) | 5.0 s | 0.54 s | 64.4 | 65.6 |
 
-Japanese, Chinese and Korean captions come a clause at a time: the translator gets the speaker's words up to the last comma or full stop (or after 16 words without one). Japanese and Chinese, written without spaces, are split into words first. Word by word was faster (Japanese 2.5 s) but English made from half a clause in a verb-final language was often wrong and stayed on screen (chrF 56.1); waiting for the whole utterance, as before, took 6.3 s on average and 31 s for a 30-second run-on. chrF varies by about 4 between identical runs, because recognition does. Nemotron's zh-TW setting writes only `<unk>`; the same Taiwanese voice with zh-CN is recognized at CER 1.6%.
+Japanese, Chinese and Korean captions come a clause at a time: the translator gets the speaker's words up to the last comma or full stop (or after 16 words without one). Japanese and Chinese, written without spaces, are split into words first. Word by word was faster (Japanese 2.5 s) but English made from half a clause in a verb-final language was often wrong and stayed on screen (chrF 56.1); waiting for the whole utterance, as before, took 6.3 s on average and 31 s for a 30-second run-on. Japanese turns end on the audio that follows the speaker's pause rather than on inserted silence, which cost the next turn its first word (三月の出荷 → の出荷); its final captions come about 0.26 s later for it. chrF varies by about 4 between identical runs, because recognition does. Nemotron's zh-TW setting writes only `<unk>`; the same Taiwanese voice with zh-CN is recognized at CER 1.6%.
 
 ## The overlay
 
