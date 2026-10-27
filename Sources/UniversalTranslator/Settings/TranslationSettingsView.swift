@@ -65,9 +65,12 @@ struct TranslationSettingsView: View {
                     }
                 }
                 Note("When a sentence ends, a stronger translator translates it again with the earlier sentences as context. If the meaning changed, the caption is revised in place and the changed words are briefly highlighted. That happens at most once per sentence, and only while the sentence is still on screen.")
+                Note(secondPassMemoryNote)
             } header: {
                 Text("After each sentence")
             }
+
+            MemorySection(settings: store.settings)
 
             Section {
                 Picker("Engine", selection: $store.settings.translation.localEngine) {
@@ -157,6 +160,12 @@ struct TranslationSettingsView: View {
 
     private var smallModel: LocalModel { LocalModel.live(store.settings.translation.localEngine) }
     private var largeModel: LocalModel { LocalModel.reviser(store.settings.translation.localEngine) }
+    /// Measured 2026-10-26: the 7B lifts chrF by 1.5-2.5 points (Japanese 62.1 → 64.6) and takes the app from about
+    /// 1.6 GB to 6.4 GB.
+    private var secondPassMemoryNote: String {
+        "Memory: \(largeModel.name) needs about \(MemoryEstimate.gigabytes(largeModel.bytes)) more while listening; "
+            + "Off adds nothing, and the 1.8B model shares live translation's when that runs on-device too. See the bar below."
+    }
 
     private var engineNote: String {
         switch store.settings.translation.localEngine {

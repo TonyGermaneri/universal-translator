@@ -498,6 +498,18 @@ def checked_passage(engine_name, logs, p, text, locale="en-US"):
     return r
 
 
+def memory_checked(logs, passages):
+    """The memory Settings says the chosen engines take (MemoryEstimate, logged at start) against the app's peak resident
+    memory while the passages played. Measured 2026-10-26: 84 % of the estimate with the second pass off, 103 % with
+    the 7B. Returns (peak, estimate) in bytes."""
+    figures = [json.load(open(os.path.join(logs, f"{p}.memory.json"))) for p in passages]
+    assert all(f["estimate"] for f in figures), "the app didn't log its memory estimate"
+    peak, estimate = max(f["peak"] for f in figures), figures[0]["estimate"]
+    assert 0.6 * estimate <= peak <= 1.15 * estimate, \
+        f"peak memory {peak / 2 ** 30:.1f} GB, Settings estimates {estimate / 2 ** 30:.1f} GB (allowed 60-115 %)"
+    return peak, estimate
+
+
 def engine(engine_name, work, args):
     require_models(*NEEDED.items(), LIVE[engine_name])
     logs = os.path.join(work, engine_name)
@@ -516,7 +528,9 @@ def engine(engine_name, work, args):
     p50 = sorted(live)[len(live) // 2] if live else float("nan")
     assert wer <= 0.05, f"word error rate {wer:.1%} (limit 5%)"
     assert p50 <= 600, f"live translation p50 {p50} ms (limit 600 ms)"
-    return f"{total} sentences, WER {wer:.1%}, live p50 {p50} ms, nothing final changed"
+    peak, estimate = memory_checked(logs, passages)
+    return (f"{total} sentences, WER {wer:.1%}, live p50 {p50} ms, nothing final changed, "
+            f"memory {peak / 2 ** 30:.1f} GB (estimate {estimate / 2 ** 30:.1f})")
 
 
 # Speech in Japanese, Chinese and Korean captioned in English: the direction the app was built for, and what the
@@ -638,7 +652,9 @@ def test_second_pass(work, args):
     assert revised > 0, "no caption was revised"
     assert after >= before, f"revisions made the English worse: chrF {before:.1f} → {after:.1f}"
     assert after >= SECOND_PASS_CHRF, f"revised English chrF {after:.1f} (floor {SECOND_PASS_CHRF})"
-    return f"{revised} captions revised, chrF {before:.1f} → {after:.1f}"
+    peak, estimate = memory_checked(logs, SECOND_PASS_PASSAGES)
+    return (f"{revised} captions revised, chrF {before:.1f} → {after:.1f}, "
+            f"memory {peak / 2 ** 30:.1f} GB (estimate {estimate / 2 ** 30:.1f})")
 
 
 def test_engine_llamacpp(work, args):

@@ -83,6 +83,8 @@ final class SpeechPipeline: SpeechEngine {
     func start() async throws {
         let s = settings.settings
         guard await AudioCapture.requestPermission(for: s.audioSource) else { throw EngineError.microphoneDenied }
+        let memory = MemoryEstimate.of(s)
+        DebugLog.write("MEMORY estimate \(memory.bytes) of \(memory.physicalMemory)")   // checked by tier3
         let status: (String) -> Void = { [weak self] message in self?.captions.status = .preparing(message) }
 
         let terms = s.translation.glossary.map(\.source).filter { !$0.isEmpty }

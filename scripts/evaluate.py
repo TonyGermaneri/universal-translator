@@ -14,6 +14,7 @@ Synthesizes test passages with macOS `say`, plays each through the built app in 
                       "committed" counts only text shown as final
   replaced            utterances whose final translation contradicted committed text
   revisions           second-pass revisions applied / evaluated
+  memory              the app's peak resident memory, beside the estimate Settings shows (MemoryEstimate)
   WER / CER           recognition error against the script: word error rate for English and Korean, character
                       error rate for Japanese and Chinese (Korean also shows its CER: spacing varies)
   chrF                how close the captions, as finally shown (after any second-pass revision), are to the
@@ -161,6 +162,7 @@ def run_passage(name, text, args, workdir):
     # (10 s quiet), one in a passage's last 10 s would go unrecorded.
     sample = os.path.join(workdir, f"{name}.sample.txt")
     launched = time.time()
+    peak_rss = 0   # the app's largest resident memory while the passage played, in bytes
     # The passage plays from when the app starts listening (ENDPOINT), not from launch. Seen 2026-10-26: a first launch
     # from a new folder took about 12 s to start, and stopping the app at launch + duration cut off the passage's last
     # 12 s, which looked like the app had stalled (likely the occasional stall seen on a first passage).
@@ -177,6 +179,9 @@ def run_passage(name, text, args, workdir):
             deadline = listening_at + duration + args.tail
             if listening_at - launched > 5:
                 print(f"{name}: slow start, listening {listening_at - launched:.0f} s after launch", file=sys.stderr)
+        if proc.poll() is None:
+            rss = subprocess.run(["ps", "-o", "rss=", "-p", str(proc.pid)], capture_output=True, text=True).stdout.strip()
+            peak_rss = max(peak_rss, int(rss) * 1024 if rss.isdigit() else 0)
         if not os.path.exists(log) or os.path.exists(sample) or proc.poll() is not None:
             continue
         speaking = listening_at is not None and time.time() < listening_at + duration - 2.5
@@ -212,6 +217,13 @@ def run_passage(name, text, args, workdir):
     r["slowQuit"] = os.path.exists(quit_sample)
     r["exited"] = exited
     r["startup"] = None if listening_at is None else listening_at - launched
+    r["peakMemory"] = peak_rss
+    estimate = re.search(r"\] MEMORY estimate (\d+) of (\d+)", open(log, encoding="utf-8").read() if os.path.exists(log) else "")
+    r["memoryEstimate"] = int(estimate.group(1)) if estimate else None
+    if args.keep_logs:
+        os.makedirs(args.keep_logs, exist_ok=True)
+        with open(os.path.join(args.keep_logs, f"{name}.memory.json"), "w") as f:
+            json.dump({"peak": peak_rss, "estimate": r["memoryEstimate"]}, f)
     return r
 
 
@@ -364,7 +376,9 @@ def summarize(name, r):
             f"{r['recognition'][2]} {r['recognition'][0]:.1%}" + (f" (CER {r['cer'][0]:.1%})" if r.get("cer") and
                                                                   r["recognition"][2] != "CER" else "") +
             (f" | chrF {chrf(*r['chrf']):.1f}" if r.get("chrf") else "") +
-            (f" (first pass {chrf(*r['chrf_first']):.1f})" if r.get("chrf_first") and r["chrf_first"] != r["chrf"] else ""))
+            (f" (first pass {chrf(*r['chrf_first']):.1f})" if r.get("chrf_first") and r["chrf_first"] != r["chrf"] else "") +
+            (f" | memory {r['peakMemory'] / 2 ** 30:.1f} GB (estimate {r['memoryEstimate'] / 2 ** 30:.1f})"
+             if r.get("peakMemory") and r.get("memoryEstimate") else ""))
 
 
 MODELS = os.path.expanduser("~/Library/Application Support/Universal Translator/Models")
