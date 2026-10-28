@@ -94,7 +94,8 @@ mkdir -p "$dist"
 # A version from a tag goes into the app; anything else (a commit, "dev") keeps the one in Info.plist.
 plist_version=""
 [[ "$version" =~ ^v?[0-9]+(\.[0-9]+){0,2}(-.*)?$ ]] && plist_version="$version"
-OUT_DIR="$dist" SIGN_IDENTITY="$identity" VERSION="$plist_version" \
+# The zip's name is also what the app's About shows (BUILD_DESCRIBE).
+OUT_DIR="$dist" SIGN_IDENTITY="$identity" VERSION="$plist_version" BUILD_DESCRIBE="$version" \
     SECURE_TIMESTAMP="$([[ "$identity" == "-" ]] && echo 0 || echo 1)" scripts/build-app.sh
 
 echo "    $(lipo -archs "$app/Contents/MacOS/UniversalTranslator"), version" \

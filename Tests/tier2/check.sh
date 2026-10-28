@@ -96,6 +96,14 @@ else
     fi
 
     codesign --verify --deep --strict "$app" 2>/dev/null && pass "signature valid" || fail "signature invalid"
+
+    # The build's identity, shown in Settings → Permissions & About and naming the release zip (2026-10-27: every
+    # build said only "0.1.0", so nobody could tell which one was installed).
+    stamp="$(/usr/libexec/PlistBuddy -c 'Print :UTBuildDescription' "$app/Contents/Info.plist" 2>/dev/null)"
+    want="${BUILD_DESCRIBE:-$(git describe --tags --always --dirty 2>/dev/null)}"
+    if [[ -z "$stamp" ]]; then fail "the app has no build identity (UTBuildDescription)"
+    elif [[ "$stamp" == "$want" ]]; then pass "build identity $stamp"
+    else fail "the app says it's build $stamp, but this is $want"; fi
 fi
 
 # --- network: the app downloads models with URLSession, which trusts only the keychain's roots. A TLS-inspecting

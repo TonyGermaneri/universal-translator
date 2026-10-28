@@ -71,7 +71,15 @@ struct AboutSettings: View {
             }
 
             Section("About") {
-                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
+                LabeledContent("Version") {
+                    HStack {
+                        Text(AppVersion.current).textSelection(.enabled)
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(AppVersion.current, forType: .string)
+                        }
+                    }
+                }
                 Note("Speech recognition: NVIDIA Nemotron 3.5 Streaming (Core ML, via FluidAudio) or Apple SpeechAnalyzer · Voice and end of turn: Silero VAD v6, Smart Turn v3.2 · Translation: Tencent Hy-MT2 1.8B / 7B (llama.cpp), Apple Translation, Apple Intelligence, or LM Studio · Policy: target-side local agreement with a forced prefix (IWSLT 2025/2026).")
             }
         }

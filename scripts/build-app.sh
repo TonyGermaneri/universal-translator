@@ -65,6 +65,11 @@ fi
 sed -e "s/__BUNDLE_ID__/$BUNDLE_ID/" -e "s/__BUILD_NUMBER__/$(date +%Y%m%d%H%M)/" \
     Resources/Info.plist > "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$APP/Contents/Info.plist"
+# Which build this is, for Settings → Permissions & About and the zip's name: "v0.1.0-23-gd7ab774" (23 commits after
+# the v0.1.0 tag, at d7ab774; "-dirty" with uncommitted changes). Every build since v0.1.0 said only "0.1.0".
+BUILD_DESCRIBE="${BUILD_DESCRIBE:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+export BUILD_DESCRIBE   # Tests/tier2/check.sh compares the app's stamp with it
+/usr/libexec/PlistBuddy -c "Add :UTBuildDescription string $BUILD_DESCRIBE" "$APP/Contents/Info.plist"
 if [[ ! -f Resources/AppIcon.icns ]]; then
     swift scripts/make-icon.swift Resources/AppIcon.icns
 fi
