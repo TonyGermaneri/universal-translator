@@ -154,9 +154,9 @@ struct GeneralSettings: View {
                         Text(LanguageNames.name(lang.minimalIdentifier)).tag(lang.minimalIdentifier)
                     }
                 }
-                ReadingAidPickers(store: store, place: .general)
+                ReadingAidPickers(store: store)
                 if !ReadingAidPickers.languages(store.settings).isEmpty {
-                    Note(ReadingAidPickers.generalNote)
+                    Note(ReadingAidPickers.note)
                 }
             }
 

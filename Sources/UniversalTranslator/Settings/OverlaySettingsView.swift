@@ -39,7 +39,7 @@ struct AppearanceSettings: View {
             }
 
             #if os(macOS)
-            ReadingAidSection(store: store)
+            ReadingAidSection()
             #endif
 
             Section("Outline & shadow") {

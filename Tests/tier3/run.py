@@ -349,24 +349,29 @@ def test_reading_aid(work, args):
     return "; ".join(results)
 
 
-def test_reading_aid_places(work, args):
-    """The reading-aid pickers show in both Settings pages, General (under the languages) and Overlay Appearance,
-    for the languages on screen, each once."""
+def test_reading_aid_settings(work, args):
+    """The reading-aid pickers show in General, under the languages, for the languages on screen, each once; Overlay
+    Appearance has only a note pointing there (pickers in both places were redundant)."""
     results = []
-    for page in ("general", "appearance"):
-        for langs, expected in (({"sourceLocale": "ja-JP", "targetLanguage": "ja"}, "ja"),
-                                ({"sourceLocale": "zh-TW", "targetLanguage": "en"}, "zh")):
+    for langs, expected in (({"sourceLocale": "ja-JP", "targetLanguage": "ja"}, "ja"),
+                            ({"sourceLocale": "zh-TW", "targetLanguage": "en"}, "zh")):
+        for page in ("general", "appearance"):
             log = os.path.join(work, f"reading-aid-{page}-{expected}.log")
             settings(**langs)
             launch({"UT_DEBUG_LOG": log, "UT_OPEN": "settings", "UT_SETTINGS_SECTION": page})
-            shown = wait_for(log, rf"READING AID pickers in {page}: ", 20)
+            shown = wait_for(log, r"READING AID (pickers|note)", 20)
+            time.sleep(1)
             quit_app()
             text = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
-            assert shown, f"{page}, {langs}: no reading-aid pickers: {text.strip()[-300:]}"
-            line = re.findall(rf"READING AID pickers in {page}: (.*)", text)[-1].strip()
-            assert line == expected, f"{page}, {langs}: pickers for {line!r}, expected {expected!r}"
-        results.append(page)
-    return "pickers in " + " and ".join(results) + " (Japanese once; Chinese for zh-TW)"
+            assert shown, f"{page}, {langs}: nothing about reading aids: {text.strip()[-300:]}"
+            pickers = re.findall(r"READING AID pickers: (.*)", text)
+            if page == "general":
+                assert pickers and pickers[-1].strip() == expected, f"general, {langs}: pickers for {pickers}, expected {expected!r}"
+            else:
+                assert not pickers, f"appearance, {langs}: pickers there too ({pickers})"
+                assert "READING AID note in appearance" in text, f"appearance, {langs}: no note pointing to General"
+        results.append(expected)
+    return "pickers in General (" + ", ".join(results) + "), only a note in Overlay Appearance"
 
 
 def test_stall_capture(work, args):
@@ -738,7 +743,7 @@ def test_mic(work, args):
 
 TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
          ("overlay_grip", test_overlay_grip), ("reading_aid", test_reading_aid),
-         ("reading_aid_places", test_reading_aid_places), ("model_import", test_model_import),
+         ("reading_aid_settings", test_reading_aid_settings), ("model_import", test_model_import),
          ("stall_capture", test_stall_capture), ("transcript", test_transcript),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("to_english_llamacpp", test_to_english_llamacpp),

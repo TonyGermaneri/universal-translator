@@ -2,16 +2,15 @@
 import SwiftUI
 import TranslatorCore
 
-/// Reading aids (furigana for Japanese; pinyin and Traditional/Simplified characters for Chinese) for the languages
-/// on screen: the translation's and the original speech's. They're drawn by Core Text, which the overlay uses only on
-/// the Mac.
+/// Reading aids (furigana for Japanese; pinyin or zhuyin, and Traditional/Simplified characters, for Chinese) for the
+/// languages on screen: the translation's and the original speech's. They're drawn by Core Text, which the overlay
+/// uses only on the Mac.
 ///
-/// The pickers show in two places, General → Languages (beside the languages they're for) and Overlay Appearance →
-/// Reading aid (beside the caption text), and both edit the one setting, `overlay.readingAids`.
+/// The pickers live in General → Languages, under the languages they're for (which decide which pickers there are).
+/// Overlay Appearance, where they used to be, has a note pointing there (`ReadingAidSection`): having the
+/// pickers in both places was redundant.
 struct ReadingAidPickers: View {
     @Bindable var store: SettingsStore
-    /// The Settings page showing them, for the test log.
-    let place: SettingsSection
 
     var body: some View {
         let languages = Self.languages(store.settings)
@@ -32,7 +31,7 @@ struct ReadingAidPickers: View {
                 }
             }
         }
-        .onAppear { DebugLog.write("READING AID pickers in \(place.rawValue): \(languages.joined(separator: ","))") }
+        .onAppear { DebugLog.write("READING AID pickers: \(languages.joined(separator: ","))") }
     }
 
     /// The languages on screen that have aids, each once (a language spoken and translated to alike).
@@ -47,30 +46,24 @@ struct ReadingAidPickers: View {
     }
 
     /// Under the pickers in General → Languages.
-    static let generalNote = "Readings or other characters for the captions in these languages. The same choices "
-        + "are in \(SettingsSection.appearance.title) → Reading aid."
+    static let note = "Reading aids for the captions in these languages, the original speech and the translation "
+        + "alike. Readings come from macOS's dictionary and can be wrong for names and some words. Lines with readings "
+        + "are taller."
 }
 
-/// Overlay Appearance → Reading aid: the pickers, with what the aids are and what they do to the captions.
+/// Overlay Appearance → Reading aid: no pickers, just what the aids are and where they're set.
 struct ReadingAidSection: View {
-    @Bindable var store: SettingsStore
-
     var body: some View {
         Section("Reading aid") {
-            ReadingAidPickers(store: store, place: .appearance)
-            Note(Self.note(anyOnScreen: !ReadingAidPickers.languages(store.settings).isEmpty))
+            Note(Self.note)
         }
+        .onAppear { DebugLog.write("READING AID note in \(SettingsSection.appearance.rawValue)") }
     }
 
-    /// Says which languages have aids at all: only those of the languages on screen are listed above, which looked
-    /// like the app supporting just one.
-    static func note(anyOnScreen: Bool) -> String {
-        let available = "Reading aids exist for \(ReadingAid.summary). Only the languages you speak and translate to "
-            + "are listed here, for the original speech and the translation alike; the same choices are under "
-            + "\(SettingsSection.general.title) → Languages."
-        return anyOnScreen
-            ? available + " Readings come from macOS's dictionary and can be wrong for names and some words. Lines with readings are taller."
-            : available
-    }
+    /// Names every language with an aid, since General lists pickers only for the languages chosen there (with
+    /// Japanese set it once looked as if only Japanese had an aid).
+    static let note = "Reading aids exist for \(ReadingAid.summary). They're set in \(SettingsSection.general.title) → "
+        + "Languages, under the languages you speak and translate to, and apply to the original speech and the "
+        + "translation alike. Lines with readings are taller."
 }
 #endif
