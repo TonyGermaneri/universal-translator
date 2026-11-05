@@ -42,7 +42,7 @@ import TranslatorCore
             #expect(note.contains("Japanese") && note.contains("Chinese"))
             #expect(note.contains("General → Languages"))
         }
-        #expect(ReadingAid.summary == "Japanese (furigana); Chinese (pinyin, Traditional characters, Simplified characters)")
+        #expect(ReadingAid.summary == "Japanese (furigana); Chinese (pinyin, zhuyin, Traditional characters, Simplified characters)")
     }
 
     @Test @MainActor func bothPlacesEditTheOneSetting() throws {
@@ -118,6 +118,8 @@ import TranslatorCore
         let shown = Ruby.annotated(text, aids: [.pinyin])
         let ruby = shown.attribute(.ctRuby, at: 1, effectiveRange: nil) as! CTRubyAnnotation
         #expect(CTRubyAnnotationGetTextForPosition(ruby, .after) as String? == "\u{2009}men\u{2009}")
+        // Zhuyin, with no word shapes, gets more room: thin spaces left ㄐㄧㄚㄐㄧㄣ reading as one run.
+        #expect(Ruby.spaced("ㄇㄣ", aids: [.zhuyin, .traditional]) == "\u{2002}ㄇㄣ\u{2002}")
         // Furigana sits over whole words and keeps its spacing.
         #expect(Ruby.spaced("きょう", aids: [.furigana]) == "きょう")
     }

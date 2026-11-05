@@ -4,7 +4,7 @@ import CoreText
 import SwiftUI
 import TranslatorCore
 
-/// Caption text with readings (furigana, pinyin) under it, or in another script. SwiftUI's Text doesn't draw ruby, so text with a reading aid
+/// Caption text with readings (furigana, pinyin, zhuyin) under it, or in another script. SwiftUI's Text doesn't draw ruby, so text with a reading aid
 /// on is drawn by Core Text instead.
 enum Ruby {
     /// Readings take this fraction of the text size.
@@ -40,9 +40,11 @@ enum Ruby {
     }
 
     /// Pinyin syllables are about as wide as their characters, so side by side they run together ("menxiān"): a thin
-    /// space either side keeps them apart (the characters spread a little to make room).
+    /// space either side keeps them apart (the characters spread a little to make room). Zhuyin symbols have no word
+    /// shapes to tell syllables apart, and with thin spaces ㄐㄧㄚㄐㄧㄣㄊㄧㄢ read as one run: they get an en space.
     static func spaced(_ reading: String, aids: [ReadingAid]) -> String {
-        aids.contains(.pinyin) ? "\u{2009}" + reading + "\u{2009}" : reading
+        if aids.contains(.zhuyin) { return "\u{2002}" + reading + "\u{2002}" }
+        return aids.contains(.pinyin) ? "\u{2009}" + reading + "\u{2009}" : reading
     }
 
     /// A reading under its text (Core Text's "after" side, which is below for horizontal text).

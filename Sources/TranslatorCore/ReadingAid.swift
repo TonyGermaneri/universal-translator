@@ -1,17 +1,17 @@
 import Foundation
 
 /// A per-language help for reading caption text: readings shown with the characters (furigana for Japanese, pinyin
-/// for Chinese), or the text shown in another script (Chinese Traditional or Simplified characters). Each aid belongs
+/// or zhuyin for Chinese), or the text shown in another script (Chinese Traditional or Simplified characters). Each aid belongs
 /// to one language; a language has at most one of each kind. Applied to a caption, aids turn it into segments: pieces
 /// of the text, some with a reading to show beside them.
 public enum ReadingAid: String, Codable, CaseIterable, Sendable {
-    case furigana, pinyin, traditional, simplified
+    case furigana, pinyin, zhuyin, traditional, simplified
 
     public enum Kind: Sendable { case readings, script }
 
     public var kind: Kind {
         switch self {
-        case .furigana, .pinyin: return .readings
+        case .furigana, .pinyin, .zhuyin: return .readings
         case .traditional, .simplified: return .script
         }
     }
@@ -20,7 +20,7 @@ public enum ReadingAid: String, Codable, CaseIterable, Sendable {
     public var language: String {
         switch self {
         case .furigana: return "ja"
-        case .pinyin, .traditional, .simplified: return "zh"
+        case .pinyin, .zhuyin, .traditional, .simplified: return "zh"
         }
     }
 
@@ -28,6 +28,7 @@ public enum ReadingAid: String, Codable, CaseIterable, Sendable {
         switch self {
         case .furigana: return "Furigana (kana under kanji)"
         case .pinyin: return "Pinyin (under each character)"
+        case .zhuyin: return "Zhuyin / bopomofo (under each character)"
         case .traditional: return "Traditional characters"
         case .simplified: return "Simplified characters"
         }
@@ -38,6 +39,7 @@ public enum ReadingAid: String, Codable, CaseIterable, Sendable {
         switch self {
         case .furigana: return "furigana"
         case .pinyin: return "pinyin"
+        case .zhuyin: return "zhuyin"
         case .traditional: return "Traditional characters"
         case .simplified: return "Simplified characters"
         }
@@ -99,6 +101,7 @@ public enum ReadingAid: String, Codable, CaseIterable, Sendable {
         switch aids.first(where: { $0.kind == .readings }) {
         case .furigana: return Furigana.segments(converted)
         case .pinyin: return Pinyin.segments(converted)
+        case .zhuyin: return Zhuyin.segments(converted)
         default: return converted.isEmpty ? [] : [ReadingSegment(converted)]
         }
     }
@@ -338,6 +341,48 @@ public enum Pinyin {
             }
         }
     }
+}
+
+/// Zhuyin (bopomofo), the phonetic symbols taught in Taiwan, for each Chinese character: pinyin's readings (above,
+/// which tokenizes more reliably than reading Traditional text as Taiwanese), with Taiwan's standard reading where a
+/// common character's differs from the mainland's, turned into zhuyin by macOS's Latin-Bopomofo transform. The tone
+/// mark follows the syllable (ㄍㄢˇ) and the neutral tone's dot goes before it (˙ㄇㄣ), as Taiwan writes zhuyin across
+/// a line; first tone has no mark.
+public enum Zhuyin {
+    /// Taiwan's standard readings (Ministry of Education dictionary) where the mainland's differ, by character in
+    /// both scripts: 星期 ㄑㄧˊ, 研究 ㄐㄧㄡˋ, 垃圾 ㄌㄜˋ ㄙㄜˋ, …
+    static let taiwan: [Character: String] = [
+        "期": "qí", "危": "wéi", "微": "wéi", "企": "qì", "儲": "chú", "储": "chú", "質": "zhí", "质": "zhí",
+        "綜": "zòng", "综": "zòng", "究": "jiù", "垃": "lè", "圾": "sè",
+    ]
+
+    public static func segments(_ text: String) -> [ReadingSegment] {
+        let pinyin = Pinyin.segments(text)
+        return pinyin.enumerated().map { i, segment in
+            guard let reading = segment.reading else { return segment }
+            var taiwanese = segment.text.count == 1 ? taiwan[segment.text.first!] ?? reading : reading
+            // 伺 is sì in 伺服 (a server: 伺服器) and cì in 伺候 on both sides of the strait.
+            if segment.text == "伺", i + 1 < pinyin.count, pinyin[i + 1].text.hasPrefix("服") { taiwanese = "sì" }
+            return ReadingSegment(segment.text, syllable(taiwanese))
+        }
+    }
+
+    private static let tones: Set<Unicode.Scalar> = ["\u{2CA}", "\u{2C7}", "\u{2CB}", "\u{2D9}"]   // ˊ ˇ ˋ ˙
+
+    /// One pinyin syllable (tone-marked; none is the neutral tone) in zhuyin. Nil for one without a vowel (the
+    /// interjections ng, hm) or not a syllable at all, which the transform spells as nonsense: partly in Latin
+    /// letters, or with tone marks inside (bia → ㄅㄧ˙ㄚ˙).
+    static func syllable(_ pinyin: String) -> String? {
+        guard Pinyin.bare(pinyin).contains(where: { "aeiouü".contains($0) }),
+              let zhuyin = pinyin.applyingTransform(StringTransform("Latin-Bopomofo"), reverse: false),
+              let last = zhuyin.unicodeScalars.last, isBopomofo(last) || tones.contains(last),
+              zhuyin.unicodeScalars.dropLast().allSatisfy(isBopomofo)
+        else { return nil }
+        // The transform puts the neutral tone's dot last.
+        return zhuyin.hasSuffix("\u{2D9}") ? "\u{2D9}" + zhuyin.dropLast() : zhuyin
+    }
+
+    private static func isBopomofo(_ s: Unicode.Scalar) -> Bool { (0x3105...0x312F).contains(s.value) }
 }
 
 /// Chinese text shown in Traditional or Simplified characters, character for character: a character whose other

@@ -304,7 +304,7 @@ def test_overlay_grip(work, args):
 
 
 def test_reading_aid(work, args):
-    """Reading aids on the sample captions: furigana (Japanese) and pinyin (Chinese) under the characters, on the
+    """Reading aids on the sample captions: furigana (Japanese), pinyin and zhuyin (Chinese) under the characters, on the
     translation line and on the original-speech line, which get taller by about the readings' size; Traditional
     characters in place of Simplified, which changes the text but not the height."""
     def panel_height(log, **fields):
@@ -326,7 +326,9 @@ def test_reading_aid(work, args):
              for line, langs, size in (("ja translation", ja_target, font), ("ja original speech", ja_source, font * 0.55))]
     cases += [("rolling", "zh translation", zh_target, {"zh": "pinyin"}, "感(gǎn)谢(xiè)大(dà)家(jiā)", font),
               ("rolling", "zh original speech", zh_source, {"zh": "pinyin,traditional"}, "感(gǎn)謝(xiè)", font * 0.55),
-              ("marquee", "zh translation", zh_target, {"zh": "traditional"}, "感謝大家今天的參與", None)]
+              ("marquee", "zh translation", zh_target, {"zh": "traditional"}, "感謝大家今天的參與", None),
+              ("rolling", "zh original speech", zh_source, {"zh": "zhuyin,traditional"}, "感(ㄍㄢˇ)謝(ㄒㄧㄝˋ)", font * 0.55),
+              ("marquee", "zh translation", zh_target, {"zh": "zhuyin"}, "感(ㄍㄢˇ)谢(ㄒㄧㄝˋ)", font)]
     offs, results = {}, []
     for layout, line, langs, aids, expected, size in cases:
         log = os.path.join(work, f"reading-{layout}-{line.replace(' ', '-')}-{len(results)}.log")

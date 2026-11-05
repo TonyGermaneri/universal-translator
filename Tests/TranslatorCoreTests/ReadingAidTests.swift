@@ -65,9 +65,9 @@ private func show(_ segments: [ReadingSegment]) -> String {
         #expect(segments.contains(ReadingSegment("見", "み")))
     }
 
-    @Test func chineseHasPinyinAndBothScripts() {
-        #expect(ReadingAid.choices(for: "zh-Hant-TW") == [.pinyin, .traditional, .simplified])
-        #expect(ReadingAid.choices(for: "zh", kind: .readings) == [.pinyin])
+    @Test func chineseHasPinyinZhuyinAndBothScripts() {
+        #expect(ReadingAid.choices(for: "zh-Hant-TW") == [.pinyin, .zhuyin, .traditional, .simplified])
+        #expect(ReadingAid.choices(for: "zh", kind: .readings) == [.pinyin, .zhuyin])
         #expect(ReadingAid.choices(for: "zh-CN", kind: .script) == [.traditional, .simplified])
         #expect(ReadingAid.choices(for: "ja", kind: .script).isEmpty)
     }
@@ -75,7 +75,8 @@ private func show(_ segments: [ReadingSegment]) -> String {
     @Test func aStoredSettingKeepsOneAidOfEachKindForItsLanguage() {
         #expect(ReadingAid.parse("pinyin,traditional", language: "zh-TW") == [.pinyin, .traditional])
         // Another language's aid, a second script and an unknown name are all skipped.
-        #expect(ReadingAid.parse("furigana,simplified, pinyin,traditional,zhuyin", language: "zh") == [.simplified, .pinyin])
+        #expect(ReadingAid.parse("furigana,simplified, pinyin,traditional,zhuyin,wadeGiles", language: "zh") == [.simplified, .pinyin])
+        #expect(ReadingAid.parse("zhuyin,traditional", language: "zh-TW") == [.zhuyin, .traditional])
         #expect(ReadingAid.parse("furigana", language: "ja") == [.furigana])
         #expect(ReadingAid.parse("", language: "ja").isEmpty)
         #expect(ReadingAid.stored([.pinyin, .traditional]) == "pinyin,traditional")
@@ -108,6 +109,55 @@ private func show(_ segments: [ReadingSegment]) -> String {
         let segments = Pinyin.segments(text)
         #expect(segments.map(\.text).joined() == text)
         #expect(show(segments) == "Apple公(gōng)司(sī)有(yǒu)3个(gè)人(rén), OK?")
+    }
+
+    @Test func zhuyinSpellsEachSyllableWithItsTone() {
+        let cases: [(String, String)] = [
+            // Tones: first unmarked, the mark after the syllable, the neutral tone's dot before it.
+            ("mā", "ㄇㄚ"), ("má", "ㄇㄚˊ"), ("mǎ", "ㄇㄚˇ"), ("mà", "ㄇㄚˋ"), ("men", "˙ㄇㄣ"), ("de", "˙ㄉㄜ"),
+            // zhi, chi, shi, ri, zi, ci, si: the consonant alone.
+            ("zhī", "ㄓ"), ("shì", "ㄕˋ"), ("rì", "ㄖˋ"), ("sì", "ㄙˋ"),
+            // y and w aren't consonants; u after j, q, x and y is ü.
+            ("yī", "ㄧ"), ("yǒu", "ㄧㄡˇ"), ("yòng", "ㄩㄥˋ"), ("yuán", "ㄩㄢˊ"), ("wǒ", "ㄨㄛˇ"), ("wèi", "ㄨㄟˋ"),
+            ("jú", "ㄐㄩˊ"), ("qù", "ㄑㄩˋ"), ("xué", "ㄒㄩㄝˊ"), ("nǚ", "ㄋㄩˇ"), ("lüè", "ㄌㄩㄝˋ"),
+            // Finals written short in pinyin: iu = iou, ui = uei, un = uen; ong is ㄨㄥ, iong ㄩㄥ.
+            ("liù", "ㄌㄧㄡˋ"), ("guì", "ㄍㄨㄟˋ"), ("dūn", "ㄉㄨㄣ"), ("dōng", "ㄉㄨㄥ"), ("jiǒng", "ㄐㄩㄥˇ"),
+            ("ér", "ㄦˊ"), ("zhuāng", "ㄓㄨㄤ"),
+        ]
+        for (pinyin, zhuyin) in cases {
+            #expect(Zhuyin.syllable(pinyin) == zhuyin, "\(pinyin)")
+        }
+        // No vowel (the interjections 嗯 ng, 噷 hm), or not a syllable, which the transform leaves partly in Latin
+        // letters (küe → ㄎüㄜ˙, mā! → ㄇㄚ!) or with tone marks inside (bia → ㄅㄧ˙ㄚ˙): no reading.
+        for nonsense in ["ng", "hm", "ê", "küe", "mā!", "bia"] {
+            #expect(Zhuyin.syllable(nonsense) == nil, "\(nonsense)")
+        }
+    }
+
+    @Test func zhuyinGoesUnderEachCharacter() {
+        #expect(show(Zhuyin.segments("我們先快速看一下")) == "我(ㄨㄛˇ)們(˙ㄇㄣ)先(ㄒㄧㄢ)快(ㄎㄨㄞˋ)速(ㄙㄨˋ)看(ㄎㄢˋ)一(ㄧ)下(ㄒㄧㄚˋ)")
+        // The overlay's sample caption, and text that isn't Chinese is left alone.
+        #expect(show(ReadingAid.segments("感谢大家", aids: [.zhuyin, .traditional])) == "感(ㄍㄢˇ)謝(ㄒㄧㄝˋ)大(ㄉㄚˋ)家(ㄐㄧㄚ)")
+        #expect(show(Zhuyin.segments("Apple公司, OK?")) == "Apple公(ㄍㄨㄥ)司(ㄙ), OK?")
+    }
+
+    @Test func zhuyinUsesTaiwansReadings() {
+        // Where Taiwan's standard reading differs from the mainland's. macOS gives it in some words (星期 xīngqí,
+        // 危险 wéixiǎn) but not in others or alone (究竟 jiūjìng, 期 qī, 储存 chǔcún); zhuyin uses it throughout.
+        #expect(show(Zhuyin.segments("星期")) == "星(ㄒㄧㄥ)期(ㄑㄧˊ)")
+        #expect(show(Zhuyin.segments("期")) == "期(ㄑㄧˊ)")
+        #expect(show(Zhuyin.segments("究竟")).hasPrefix("究(ㄐㄧㄡˋ)"))
+        #expect(show(Pinyin.segments("储存")) == "储(chǔ)存(cún)", "pinyin keeps macOS's reading")
+        #expect(show(Zhuyin.segments("研究")) == "研(ㄧㄢˊ)究(ㄐㄧㄡˋ)")
+        #expect(show(Zhuyin.segments("垃圾")) == "垃(ㄌㄜˋ)圾(ㄙㄜˋ)")
+        #expect(show(Zhuyin.segments("危險")).hasPrefix("危(ㄨㄟˊ)"))
+        #expect(show(Zhuyin.segments("企業")).hasPrefix("企(ㄑㄧˋ)"))
+        // Both scripts.
+        #expect(show(Zhuyin.segments("儲存")).hasPrefix("儲(ㄔㄨˊ)"))
+        #expect(show(Zhuyin.segments("储存")).hasPrefix("储(ㄔㄨˊ)"))
+        // 伺 is sì only in 伺服.
+        #expect(show(Zhuyin.segments("伺服器")).hasPrefix("伺(ㄙˋ)服(ㄈㄨˊ)"))
+        #expect(show(Zhuyin.segments("伺候")).hasPrefix("伺(ㄘˋ)"))
     }
 
     @Test func scriptConversionKeepsTheTextsLength() {
