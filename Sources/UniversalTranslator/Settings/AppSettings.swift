@@ -321,7 +321,8 @@ struct OverlaySettings: Codable, Equatable {
     var marqueeSpeed: Double = 10
     var alignment: AlignmentChoice = .center
     /// Reading aids by base language ("ja": "furigana", "zh": "pinyin,traditional"), for every caption line in that
-    /// language: the translation    /// and the original speech. Stored as raw values so a name this build doesn't know is ignored, not a reset.
+    /// language: the translation and the original speech. Stored as raw values so a name this build doesn't know is
+    /// ignored, not a reset.
     var readingAids: [String: String] = [:]
 
     // Typography
@@ -376,6 +377,19 @@ struct OverlaySettings: Codable, Equatable {
     /// The reading aids turned on for caption text in `language` (any BCP-47 identifier), at most one of each kind.
     func readingAids(for language: String) -> [ReadingAid] {
         ReadingAid.parse(readingAids[ReadingAid.baseLanguage(language)] ?? "", language: language)
+    }
+
+    /// The language's aid of one kind (nil: off).
+    func readingAid(_ kind: ReadingAid.Kind, for language: String) -> ReadingAid? {
+        readingAids(for: language).first { $0.kind == kind }
+    }
+
+    /// Sets the language's aid of one kind and keeps its aid of the other kind. Both places that show the pickers
+    /// (General → Languages, Overlay Appearance → Reading aid) set it here.
+    mutating func setReadingAid(_ aid: ReadingAid?, _ kind: ReadingAid.Kind, for language: String) {
+        let others = readingAids(for: language).filter { $0.kind != kind }
+        let aids = (aid.map { [$0] } ?? []) + others
+        readingAids[ReadingAid.baseLanguage(language)] = aids.isEmpty ? nil : ReadingAid.stored(aids)
     }
 }
 

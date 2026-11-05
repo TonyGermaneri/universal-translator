@@ -347,6 +347,26 @@ def test_reading_aid(work, args):
     return "; ".join(results)
 
 
+def test_reading_aid_places(work, args):
+    """The reading-aid pickers show in both Settings pages, General (under the languages) and Overlay Appearance,
+    for the languages on screen, each once."""
+    results = []
+    for page in ("general", "appearance"):
+        for langs, expected in (({"sourceLocale": "ja-JP", "targetLanguage": "ja"}, "ja"),
+                                ({"sourceLocale": "zh-TW", "targetLanguage": "en"}, "zh")):
+            log = os.path.join(work, f"reading-aid-{page}-{expected}.log")
+            settings(**langs)
+            launch({"UT_DEBUG_LOG": log, "UT_OPEN": "settings", "UT_SETTINGS_SECTION": page})
+            shown = wait_for(log, rf"READING AID pickers in {page}: ", 20)
+            quit_app()
+            text = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+            assert shown, f"{page}, {langs}: no reading-aid pickers: {text.strip()[-300:]}"
+            line = re.findall(rf"READING AID pickers in {page}: (.*)", text)[-1].strip()
+            assert line == expected, f"{page}, {langs}: pickers for {line!r}, expected {expected!r}"
+        results.append(page)
+    return "pickers in " + " and ".join(results) + " (Japanese once; Chinese for zh-TW)"
+
+
 def test_stall_capture(work, args):
     """The engine tests' evidence for a stuck app: evaluate.py samples an app whose log has gone quiet, and one that
     doesn't quit when asked, then kills it. Checked with a stand-in app that logs once, then ignores everything."""
@@ -715,7 +735,8 @@ def test_mic(work, args):
 
 
 TESTS = [("first_run_gate", test_first_run_gate), ("dock", test_dock), ("overlay_display", test_overlay_display),
-         ("overlay_grip", test_overlay_grip), ("reading_aid", test_reading_aid), ("model_import", test_model_import),
+         ("overlay_grip", test_overlay_grip), ("reading_aid", test_reading_aid),
+         ("reading_aid_places", test_reading_aid_places), ("model_import", test_model_import),
          ("stall_capture", test_stall_capture), ("transcript", test_transcript),
          ("engine_llamacpp", test_engine_llamacpp),
          ("engine_mlx", test_engine_mlx), ("to_english_llamacpp", test_to_english_llamacpp),

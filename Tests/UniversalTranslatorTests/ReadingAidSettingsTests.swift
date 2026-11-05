@@ -45,6 +45,47 @@ import TranslatorCore
         #expect(ReadingAid.summary == "Japanese (furigana); Chinese (pinyin, Traditional characters, Simplified characters)")
     }
 
+    @Test @MainActor func bothPlacesEditTheOneSetting() throws {
+        // General → Languages and Overlay Appearance → Reading aid each make their own pickers from the same store.
+        let suite = "ut.tier1.reading-aid-both"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = SettingsStore(defaults: defaults)
+        store.settings.sourceLocale = "zh-TW"
+        store.settings.targetLanguage = "en"
+        #expect(ReadingAidPickers.languages(store.settings) == ["zh"])
+        let general = (readings: ReadingAidPickers.aid(store, "zh", .readings), script: ReadingAidPickers.aid(store, "zh", .script))
+        let overlay = (readings: ReadingAidPickers.aid(store, "zh", .readings), script: ReadingAidPickers.aid(store, "zh", .script))
+        general.readings.wrappedValue = .pinyin
+        #expect(overlay.readings.wrappedValue == .pinyin, "a change in General didn't show in Overlay Appearance")
+        overlay.script.wrappedValue = .traditional
+        #expect(general.script.wrappedValue == .traditional, "a change in Overlay Appearance didn't show in General")
+        #expect(general.readings.wrappedValue == .pinyin, "setting the characters dropped the readings")
+        // The captions read the same setting, for the speech's locale.
+        #expect(Set(store.settings.overlay.readingAids(for: "zh-TW")) == [.pinyin, .traditional])
+        general.readings.wrappedValue = nil
+        #expect(overlay.readings.wrappedValue == nil && overlay.script.wrappedValue == .traditional)
+        overlay.script.wrappedValue = nil
+        #expect(store.settings.overlay.readingAids["zh"] == nil, "all off leaves nothing stored")
+        // Japanese spoken and translated to: one set of pickers.
+        store.settings.sourceLocale = "ja-JP"
+        store.settings.targetLanguage = "ja"
+        #expect(ReadingAidPickers.languages(store.settings) == ["ja"])
+    }
+
+    @Test func anAidSetForALocaleIsStoredUnderItsLanguage() {
+        var o = OverlaySettings()
+        o.setReadingAid(.pinyin, .readings, for: "zh-TW")
+        #expect(o.readingAids == ["zh": "pinyin"])
+        #expect(o.readingAid(.readings, for: "zh-CN") == .pinyin)
+        #expect(o.readingAid(.script, for: "zh-CN") == nil)
+    }
+
+    @Test func theGeneralNoteNamesTheOtherPlace() {
+        #expect(ReadingAidPickers.generalNote.contains("Overlay Appearance → Reading aid"))
+    }
+
     @Test func settingsOfferAidsForTheLanguagesOnScreen() {
         #expect(ReadingAid.languages(offeredFor: ["ja", "en-US"]) == ["ja"])
         #expect(ReadingAid.languages(offeredFor: ["en", "ja-JP"]) == ["ja"])
