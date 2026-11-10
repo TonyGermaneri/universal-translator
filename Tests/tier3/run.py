@@ -442,8 +442,27 @@ def test_stall_capture(work, args):
     heard = open(slow_log, encoding="utf-8").read().count("volatile") if os.path.exists(slow_log) else 0
     assert r["startup"] and r["startup"] >= 7, f"listening didn't start late, or wasn't noticed: {r['startup']}"
     assert heard >= 10, f"a slow start was cut off: {heard} log lines after it started listening"
+
+    # The Mac sleeping mid-passage (seen 2026-11-10: lid closed for 88 s) is reported as that, not scored as the
+    # app's recognition. Stand-in: the slow app, with evaluate.py's sleep clock faking 88 s asleep.
+    opts.keep_logs = os.path.join(work, "slept")
+    real_clock, evaluate.APP = evaluate.asleep_since, slow
+    evaluate.asleep_since = lambda total, awake: 88.0
+    try:
+        r = evaluate.run_passage("slept", "Hello there.", opts, work)
+    finally:
+        evaluate.APP, evaluate.asleep_since = real, real_clock
+    assert r["slept"] == 88 and os.path.exists(os.path.join(opts.keep_logs, "slept.slept.txt")), "a sleep wasn't recorded"
+    try:
+        checked_passage("llamaCpp", opts.keep_logs, "slept", "Hello there.")
+        raise AssertionError("a passage the Mac slept through was judged anyway")
+    except AssertionError as error:
+        assert "slept 88 s" in str(error), f"a passage the Mac slept through failed for another reason: {error}"
+    awake = (time.clock_gettime(time.CLOCK_MONOTONIC_RAW), time.clock_gettime(time.CLOCK_UPTIME_RAW))
+    assert abs(evaluate.asleep_since(*awake)) < 1, "the sleep clock counts time awake as asleep"
     return ("a quiet log and a slow quit are both sampled; the stuck app is killed; only a quiet log is a stall; "
-            "a stall mid-passage is sampled while it's spoken; a slow start still gets the whole passage")
+            "a stall mid-passage is sampled while it's spoken; a slow start still gets the whole passage; "
+            "a passage the Mac slept through fails as that")
 
 
 def test_transcript(work, args):
@@ -504,6 +523,9 @@ def checked_passage(engine_name, logs, p, text, locale="en-US"):
     """One passage's log from evaluate.py, checked for what every engine run needs: the neural endpointing, the
     engine's model translating, finished sentences, no stall and no slow quit. Returns evaluate.parse's result."""
     label = p if locale == "en-US" else f"{locale} {p}"
+    slept = os.path.join(logs, f"{p}.slept.txt")
+    assert not os.path.exists(slept), f"{label}: the Mac slept {open(slept).read().strip()} s during the passage " \
+                                      "(lid closed or idle sleep), so the run says nothing about the app: rerun it"
     log = open(os.path.join(logs, f"{p}.log"), encoding="utf-8").read()
     # The neural VAD and end-of-turn model, not the energy fallback a failed download leaves behind.
     assert "ENDPOINT vad=silero turn=smart-turn" in log, f"{label}: not on Silero VAD + Smart Turn"

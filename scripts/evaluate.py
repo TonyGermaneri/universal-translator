@@ -147,6 +147,12 @@ def defaults_for(args):
     return {"settings.v1": json.dumps(settings).encode()}
 
 
+def asleep_since(total, awake):
+    """Seconds the Mac slept since `total`/`awake` were read from CLOCK_MONOTONIC_RAW and CLOCK_UPTIME_RAW: both are
+    immune to clock changes, and only the second stops while the Mac sleeps."""
+    return (time.clock_gettime(time.CLOCK_MONOTONIC_RAW) - total) - (time.clock_gettime(time.CLOCK_UPTIME_RAW) - awake)
+
+
 def run_passage(name, text, args, workdir):
     audio = os.path.join(workdir, f"{name}.aiff")
     log = os.path.join(workdir, f"{name}.log")
@@ -162,6 +168,7 @@ def run_passage(name, text, args, workdir):
     # (10 s quiet), one in a passage's last 10 s would go unrecorded.
     sample = os.path.join(workdir, f"{name}.sample.txt")
     launched = time.time()
+    clocks = (time.clock_gettime(time.CLOCK_MONOTONIC_RAW), time.clock_gettime(time.CLOCK_UPTIME_RAW))
     peak_rss = 0   # the app's largest resident memory while the passage played, in bytes
     # The passage plays from when the app starts listening (ENDPOINT), not from launch. Seen 2026-10-26: a first launch
     # from a new folder took about 12 s to start, and stopping the app at launch + duration cut off the passage's last
@@ -200,9 +207,18 @@ def run_passage(name, text, args, workdir):
         proc.kill()
         proc.wait()
         print(f"{name}: the app took more than 10 s to quit (sampled, then killed)", file=sys.stderr)
+    # Seen 2026-11-10: closing the lid slept the Mac 88 s mid-passage. The app's log stopped and resumed, this loop
+    # slept too (so took no sample), and the passage scored as 97 % misheard. A run the Mac slept through says nothing
+    # about the app: say so (tier3 fails it as "slept", not as the app's fault).
+    slept = asleep_since(*clocks)
+    if slept > 5:
+        print(f"{name}: the Mac slept {slept:.0f} s during the passage", file=sys.stderr)
     if args.keep_logs and os.path.exists(log):
         os.makedirs(args.keep_logs, exist_ok=True)
         subprocess.run(["cp", log, os.path.join(args.keep_logs, f"{name}.log")])
+        if slept > 5:
+            with open(os.path.join(args.keep_logs, f"{name}.slept.txt"), "w") as f:
+                f.write(f"{slept:.0f}\n")
         for kept in (sample, quit_sample):
             if os.path.exists(kept):
                 subprocess.run(["cp", kept, args.keep_logs])
@@ -215,6 +231,7 @@ def run_passage(name, text, args, workdir):
     r["chrf_first"] = (strip_markup(reference), " ".join(x.get("translation", "") for x in r["sentences"])) \
         if reference else None
     r["slowQuit"] = os.path.exists(quit_sample)
+    r["slept"] = slept if slept > 5 else 0
     r["exited"] = exited
     r["startup"] = None if listening_at is None else listening_at - launched
     r["peakMemory"] = peak_rss
