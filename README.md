@@ -48,6 +48,29 @@ On first launch the Settings window opens:
 2. Under **Translation**, download **Hy-MT2 1.8B** and, optionally, **Hy-MT2 7B**. Apple Translation is used until then.
 3. Click **Start Listening** or press **⌃⌥⌘T**.
 
+On macOS 15 there's no Apple Speech or Apple Translation to fall back on: Settings → General lists the models to download under **Before you start**, and listening starts once they're in place.
+
+### Keeping macOS 15 working
+
+macOS 26 is the reference; macOS 15 gets the same app without Apple's engines. When changing code:
+
+- **macOS 26 APIs** (SpeechAnalyzer, the direct `TranslationSession` initializer, FoundationModels, …): gate them with `@available`/`#available(macOS 26, *)` or `Platform.hasAppleModels`, and give macOS 15 a Nemotron/Hy-MT2 path or hide the feature. On macOS 15 never fall back to an Apple engine; throw or turn the feature off instead (see `EngineError.modelsRequired`, the `selectable` engine lists and `AppSettings.withoutUnavailableEngines()`). Building on macOS 15 lists every miss as "is only available in macOS 26.0 or newer".
+- **macOS 26.4 SDK APIs** (such as `TranslationSession.Strategy`): wrap them in `#if compiler(>=6.3)`, since Xcode 26.3 ships the 26.2 SDK. `AppleTranslator` has a short `#else` copy for that case; keep the two in step.
+- **FoundationModels stays weak-linked**, because it doesn't exist on macOS 15. Tier 2 checks it on every build.
+- **Floors:** `.macOS(.v15)` in Package.swift and `LSMinimumSystemVersion` 15.0 in Resources/Info.plist. iOS stays at 26.4; the iOS project compiles most of `Sources/UniversalTranslator`, so shared code must still build for iOS.
+
+On macOS 15 the newest Xcode is 26.3 (Swift 6.2). mlx-swift's manifest asks for Swift tools 6.3 (for a Linux-only feature), so `scripts/build-app.sh` and `Tests/tier1/run.sh` use a local copy of the pinned revision with only that line lowered (`scripts/vendor-mlx-swift.sh`) and put back Package.resolved, which resolving on Swift 6.2 rewrites. After a bare `swift test` or `xcodebuild` on macOS 15, run `git checkout Package.resolved`.
+
+CI builds on macOS 26 only, so the macOS 15 path is checked on a macOS 15 Mac with three test tiers:
+
+| Tier | Command | Checks | When |
+| --- | --- | --- | --- |
+| 1 | `Tests/tier1/run.sh` | Unit tests, including the app's engine choices on both systems: each decision takes `hasAppleModels`, so one Mac checks the macOS 15 and macOS 26 answers. `Tests/tier1/mutate.py SPEC.json` breaks each listed decision in turn and reports any that no test caught. | Every change (seconds) |
+| 2 | `Tests/tier2/check.sh [--network]` | Build and Mac health: floors, Package.resolved pins, the vendored mlx-swift, deployment target, weak FoundationModels, MLX shaders, signature, build stamp. `--network` checks that model downloads get through a TLS-inspecting proxy. | Every build (`build-app.sh` runs it) |
+| 3 | `Tests/tier3/run.py [--quick] [--speaker]` | The built app, live (about 20 minutes): first-run gate, Dock, overlay on each display, hover grip, reading aids, model import, transcript file, both engines, Japanese/Chinese/Korean → English limits, second pass, system audio, microphone (`--speaker` plays speech aloud). | Before changes to engines, audio or windows |
+
+Tier 3 needs the models downloaded (Nemotron Latin and multilingual, Silero VAD, Smart Turn, both Hy-MT2 1.8B builds) and refuses to run while any copy of the app is running. A bug found while running the app gets a test in the tier that would have caught it.
+
 ## iPhone and iPad
 
 The iOS app (iOS/iPadOS 26.4 or later) shares the Mac app's speech, translation and caption code: `iOS/UniversalTranslator.xcodeproj` compiles `Sources/UniversalTranslator` directly, except the Mac-only files listed in the project, and adds its own screens in `iOS/UniversalTranslator/`. iOS doesn't allow these Mac features, so the iOS app works differently:
@@ -242,6 +265,11 @@ Debug hooks (environment variables):
 | `UT_OPEN=settings\|transcript`, `UT_SETTINGS_SECTION` | Opens a window at launch (for screenshots) |
 | `UT_PAUSE_AT=9,14` | Toggles pause at these seconds after launch |
 | `UT_TAP_PID` | Captures (and mutes) one process instead of the selected source |
+| `UT_MODELS_DIR` | Uses this folder for models |
+| `UT_IMPORT_MODEL=<model id>=<path>` | Imports a hand-downloaded model at launch (logs `IMPORT <id> ok\|failed`) |
+| `UT_TRANSCRIPTS_DIR` | Saves transcripts here instead of Documents › Universal Translator |
+| `UT_PHYSICAL_MEMORY=<GB>` | The memory the Settings memory bar measures against (to see a 16 or 8 GB Mac) |
+| `UT_PREVIEW_DIR` (tier 1) | Saves the memory bar's offscreen renderings as PNGs |
 
 `llm-bench` measures the on-device models outside the app. Build it with `xcodebuild build -scheme llm-bench -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode`, then run `.build/xcode/Build/Products/Release/llm-bench` with `DYLD_FRAMEWORK_PATH=.build/xcode/Build/Products/Release`:
 
