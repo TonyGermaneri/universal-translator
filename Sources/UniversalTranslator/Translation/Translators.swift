@@ -65,7 +65,7 @@ enum LanguageNames {
 
 // MARK: - Apple Translation
 
-#if compiler(>=6.3)
+#if TRANSLATION_STRATEGIES || os(iOS)
 /// Apple's on-device Translation framework. `.lowLatency` (~30–150 ms) drives live captions;
 /// `.highFidelity` (~0.4–0.8 s) is better suited to the second pass.
 @available(macOS 26, *)
@@ -133,9 +133,9 @@ final class AppleTranslator: SentenceTranslator {
     }
 }
 #else
-/// Built with the macOS 26.2 SDK (Xcode 26.3, the newest Xcode that runs on macOS 15), which predates translation
-/// strategies: there's only the standard model, so `lowLatency` is ignored. Builds with the 26.4 SDK use the class
-/// above; keep the two in step.
+/// The macOS 15 build (MACOS_TARGET=15, and any build with Xcode 26.3's macOS 26.2 SDK): translation strategies need
+/// macOS 26.4, so there's only the standard model and `lowLatency` is ignored. The macOS 26.4 build and iOS use the
+/// class above; keep the two in step.
 @available(macOS 26, *)
 @MainActor
 final class AppleTranslator: SentenceTranslator {

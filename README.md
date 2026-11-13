@@ -50,18 +50,35 @@ On first launch the Settings window opens:
 
 On macOS 15 there's no Apple Speech or Apple Translation to fall back on: Settings → General lists the models to download under **Before you start**, and listening starts once they're in place.
 
+### Two Mac builds
+
+The Mac app comes in two builds of the same sources, chosen with `MACOS_TARGET` (read by Package.swift and the build scripts):
+
+| `MACOS_TARGET` | Runs on | Difference |
+| --- | --- | --- |
+| `26.4` (default) | macOS 26.4 and later | Apple Translation's low-latency model (`TranslationSession.Strategy`), compiled in under `TRANSLATION_STRATEGIES` |
+| `15` | macOS 15 and later | Apple Translation uses its standard model only |
+
+```sh
+scripts/build-app.sh                    # the macOS 26.4 build
+MACOS_TARGET=15 scripts/build-app.sh    # the macOS 15 build
+MACOS_TARGET=15 swift test              # tests against the macOS 15 build
+```
+
+Xcode 26.3 and earlier (Swift < 6.3) ship the macOS 26.2 SDK, which has no strategies, so they always make the macOS 15 build. CI tests and builds both; a release publishes both zips (`…-macOS.zip` and `…-macOS15.zip`).
+
 ### Keeping macOS 15 working
 
 macOS 26 is the reference; macOS 15 gets the same app without Apple's engines. When changing code:
 
 - **macOS 26 APIs** (SpeechAnalyzer, the direct `TranslationSession` initializer, FoundationModels, …): gate them with `@available`/`#available(macOS 26, *)` or `Platform.hasAppleModels`, and give macOS 15 a Nemotron/Hy-MT2 path or hide the feature. On macOS 15 never fall back to an Apple engine; throw or turn the feature off instead (see `EngineError.modelsRequired`, the `selectable` engine lists and `AppSettings.withoutUnavailableEngines()`). Building on macOS 15 lists every miss as "is only available in macOS 26.0 or newer".
-- **macOS 26.4 SDK APIs** (such as `TranslationSession.Strategy`): wrap them in `#if compiler(>=6.3)`, since Xcode 26.3 ships the 26.2 SDK. `AppleTranslator` has a short `#else` copy for that case; keep the two in step.
+- **macOS 26.4 APIs** (such as `TranslationSession.Strategy`): wrap them in `#if TRANSLATION_STRATEGIES || os(iOS)`, so only the macOS 26.4 build (and iOS, whose floor is 26.4) compiles them. `@available(macOS 26, *)` isn't enough: the macOS 15 build fails with "is only available in macOS 26.4 or newer". `AppleTranslator` has a short `#else` copy for the macOS 15 build; keep the two in step.
 - **FoundationModels stays weak-linked**, because it doesn't exist on macOS 15. Tier 2 checks it on every build.
-- **Floors:** `.macOS(.v15)` in Package.swift and `LSMinimumSystemVersion` 15.0 in Resources/Info.plist. iOS stays at 26.4; the iOS project compiles most of `Sources/UniversalTranslator`, so shared code must still build for iOS.
+- **Floors:** `.macOS(.v15)` or `.macOS("26.4")` in Package.swift, following `MACOS_TARGET`. `LSMinimumSystemVersion` in Resources/Info.plist stays 15.0, and `scripts/build-app.sh` sets each build's own. iOS stays at 26.4; the iOS project compiles most of `Sources/UniversalTranslator`, so shared code must still build for iOS.
 
 On macOS 15 the newest Xcode is 26.3 (Swift 6.2). mlx-swift's manifest asks for Swift tools 6.3 (for a Linux-only feature), so `scripts/build-app.sh` and `Tests/tier1/run.sh` use a local copy of the pinned revision with only that line lowered (`scripts/vendor-mlx-swift.sh`) and put back Package.resolved, which resolving on Swift 6.2 rewrites. After a bare `swift test` or `xcodebuild` on macOS 15, run `git checkout Package.resolved`.
 
-CI builds on macOS 26 only, so the macOS 15 path is checked on a macOS 15 Mac with three test tiers:
+CI builds both on macOS 26 only, so the macOS 15 path is checked on a macOS 15 Mac with three test tiers:
 
 | Tier | Command | Checks | When |
 | --- | --- | --- | --- |

@@ -13,6 +13,9 @@
 #   VERSION           marketing version, e.g. 0.2.0 or v0.2.0 (default: the one in Resources/Info.plist)
 #   OUT_DIR           where the app goes (default: build)
 #   BUNDLE_ID         bundle identifier (default: com.germaneri.UniversalTranslator)
+#   MACOS_TARGET      26.4 (default) or 15: which of the two Mac builds to make (see Package.swift). 26.4 needs
+#                     macOS 26.4 and has Apple Translation's low-latency model; 15 runs on macOS 15 without it.
+#                     Xcode 26.3 and earlier (Swift < 6.3) can only make the 15 build, so that's their default.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,13 +24,32 @@ BUNDLE_ID="${BUNDLE_ID:-com.germaneri.UniversalTranslator}"
 OUT_DIR="${OUT_DIR:-build}"
 APP="$OUT_DIR/$APP_NAME.app"
 
-# xcodebuild rather than `swift build`: only xcodebuild compiles MLX's Metal shaders. (On a fresh Xcode, run
-# `sudo xcodebuild -runFirstLaunch` and `xcodebuild -downloadComponent MetalToolchain` once.)
-DERIVED=".build/xcode"
-# Swift < 6.3 (Xcode 26.3 and earlier, e.g. on macOS 15) needs the patched mlx-swift copy Package.swift points at.
 SWIFT_VERSION="$(xcrun swift -version 2>&1 | sed -nE 's/.*Apple Swift version ([0-9]+)\.([0-9]+).*/\1 \2/p')"
 read -r SWIFT_MAJOR SWIFT_MINOR <<< "$SWIFT_VERSION"
-if (( SWIFT_MAJOR < 6 || (SWIFT_MAJOR == 6 && SWIFT_MINOR < 3) )); then
+LEGACY_SWIFT=0
+(( SWIFT_MAJOR < 6 || (SWIFT_MAJOR == 6 && SWIFT_MINOR < 3) )) && LEGACY_SWIFT=1
+
+if (( LEGACY_SWIFT )); then MACOS_TARGET="${MACOS_TARGET:-15}"; else MACOS_TARGET="${MACOS_TARGET:-26.4}"; fi
+case "$MACOS_TARGET" in
+    26.4) MIN_SYSTEM=26.4 ;;
+    15) MIN_SYSTEM=15.0 ;;
+    *) echo "MACOS_TARGET must be 26.4 or 15, not $MACOS_TARGET" >&2; exit 1 ;;
+esac
+if (( LEGACY_SWIFT )) && [[ "$MACOS_TARGET" != 15 ]]; then
+    echo "Swift $SWIFT_MAJOR.$SWIFT_MINOR ships the macOS 26.2 SDK, which can only make the macOS 15 build (MACOS_TARGET=15)" >&2
+    exit 1
+fi
+export MACOS_TARGET   # read by Package.swift, and by Tests/tier2/check.sh
+echo "==> macOS $MACOS_TARGET build"
+
+# xcodebuild rather than `swift build`: only xcodebuild compiles MLX's Metal shaders. (On a fresh Xcode, run
+# `sudo xcodebuild -runFirstLaunch` and `xcodebuild -downloadComponent MetalToolchain` once.)
+# Each build has its own derived data, so neither reuses the other's evaluated manifest or objects; the fetched
+# packages are shared (and cached by CI at .build/xcode/SourcePackages).
+DERIVED=".build/xcode"
+[[ "$MACOS_TARGET" == 15 ]] && DERIVED=".build/xcode-macos15"
+# Swift < 6.3 (Xcode 26.3 and earlier, e.g. on macOS 15) needs the patched mlx-swift copy Package.swift points at.
+if (( LEGACY_SWIFT )); then
     scripts/vendor-mlx-swift.sh
     # With the local override, resolution drops the mlx-swift pin from Package.resolved; put the checked-in file back.
     RESOLVED_BACKUP="$(mktemp)"
@@ -35,7 +57,7 @@ if (( SWIFT_MAJOR < 6 || (SWIFT_MAJOR == 6 && SWIFT_MINOR < 3) )); then
     trap 'cp "$RESOLVED_BACKUP" Package.resolved; rm -f "$RESOLVED_BACKUP"' EXIT
 fi
 xcodebuild build -scheme UniversalTranslator -configuration Release -destination 'platform=macOS,arch=arm64' \
-    -derivedDataPath "$DERIVED" -skipMacroValidation -skipPackagePluginValidation -quiet
+    -derivedDataPath "$DERIVED" -clonedSourcePackagesDirPath .build/xcode/SourcePackages -skipMacroValidation -skipPackagePluginValidation -quiet
 # Restored now rather than at exit, so the health check below sees the checked-in file.
 if [[ -n "${RESOLVED_BACKUP:-}" ]]; then cp "$RESOLVED_BACKUP" Package.resolved; fi
 BIN_DIR="$DERIVED/Build/Products/Release"
@@ -65,6 +87,7 @@ fi
 sed -e "s/__BUNDLE_ID__/$BUNDLE_ID/" -e "s/__BUILD_NUMBER__/$(date +%Y%m%d%H%M)/" \
     Resources/Info.plist > "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MIN_SYSTEM" "$APP/Contents/Info.plist"
 # Which build this is, for Settings → Permissions & About and the zip's name: "v0.1.0-23-gd7ab774" (23 commits after
 # the v0.1.0 tag, at d7ab774; "-dirty" with uncommitted changes). Every build since v0.1.0 said only "0.1.0".
 BUILD_DESCRIBE="${BUILD_DESCRIBE:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
@@ -94,7 +117,7 @@ else
     codesign --force --sign - --entitlements Resources/UniversalTranslator.entitlements "$APP"
 fi
 codesign --verify --deep --strict "$APP"
-echo "Built $APP ($SHORT_VERSION)"
+echo "Built $APP ($SHORT_VERSION, macOS $MACOS_TARGET build)"
 # Tier 2: deployment target, weak links, bundled shaders, pins (Tests/tier2/check.sh).
 Tests/tier2/check.sh "$APP"
 

@@ -2,7 +2,7 @@
 #
 #   git tag -a v0.2.0 -m "Universal Translator 0.2.0" && git push origin v0.2.0
 #
-# Builds the Mac app from the tagged commit, signs it with the Developer ID in MACOS_CERTIFICATE_P12, has Apple
+# Builds both Mac apps (the macOS 26.4 build and the macOS 15 build, see Package.swift) from the tagged commit, signs each with the Developer ID in MACOS_CERTIFICATE_P12, has Apple
 # notarize it, staples the ticket, and publishes the zip as a GitHub release. scripts/package-macos.sh does the
 # work, so the same zip can be made locally before tagging.
 #
@@ -85,7 +85,10 @@ jobs:
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
-        run: scripts/package-macos.sh "$(git describe --tags --always)"
+        # One after the other, in the same dist/: each keeps the other's zip, and SHA256SUMS.txt covers both.
+        run: |
+          MACOS_TARGET=26.4 scripts/package-macos.sh "$(git describe --tags --always)"
+          MACOS_TARGET=15 scripts/package-macos.sh "$(git describe --tags --always)"
 
       - name: Remove the keychain
         if: always()
@@ -100,9 +103,8 @@ jobs:
             echo ""
             echo "| | |"
             echo "| --- | --- |"
-            echo "| zip | $(cd dist && ls -- *.zip) |"
             echo "| signing | $(cat dist/signing.txt) |"
-            echo "| sha256 | \`$(cut -d' ' -f1 dist/SHA256SUMS.txt)\` |"
+            while read -r sum name; do echo "| $name | \`$sum\` |"; done < dist/SHA256SUMS.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
       # signing.txt rides along so the notes can describe the build that was made.

@@ -1,4 +1,6 @@
-# Every push to main and every pull request: the tests, the Mac app, and the iPhone and iPad app.
+# Every push to main and every pull request: the tests, the Mac app, and the iPhone and iPad app. The tests and the
+# Mac app run for both Mac builds (MACOS_TARGET, see Package.swift): macOS 26.4, with Apple Translation's
+# low-latency model, and macOS 15, without it.
 #
 # The Mac job builds through scripts/package-macos.sh, the same script a release uses, so packaging is exercised
 # on every push rather than for the first time under a tag. Its zip is an ad-hoc build of that commit; the
@@ -21,8 +23,14 @@ permissions:
 
 jobs:
   test:
-    name: Tests
+    name: Tests (macOS ${{ matrix.macos }} build)
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        macos: ['26.4', '15']
+    env:
+      MACOS_TARGET: ${{ matrix.macos }}
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/xcode
@@ -32,8 +40,14 @@ jobs:
         run: swift test
 
   mac:
-    name: Mac app
+    name: Mac app (macOS ${{ matrix.macos }} build)
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        macos: ['26.4', '15']
+    env:
+      MACOS_TARGET: ${{ matrix.macos }}
     steps:
       # Unshallow, so git describe can name the build.
       - uses: actions/checkout@v5
@@ -55,7 +69,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mac-${{ github.sha }}
+          name: mac-${{ matrix.macos }}-${{ github.sha }}
           path: dist/*.zip
           if-no-files-found: error
           retention-days: 14
