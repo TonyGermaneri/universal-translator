@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Tier 2: build and environment health. What a build must have to run on macOS 15, and what this Mac must have for
-# the app to work, the kind of thing no unit test sees. scripts/build-app.sh runs it on
+# Tier 2: build and environment health. What a build must have to run on its macOS floor (15 or 26.4), and what
+# this Mac must have for the app to work, the kind of thing no unit test sees. scripts/build-app.sh runs it on
 # every build.
 #
 #   Tests/tier2/check.sh [app]              default: build/Universal Translator.app
 #   Tests/tier2/check.sh --network [app]    also check that the app's model downloads can reach Hugging Face
+#
+# MACOS_TARGET (26.4 or 15, as for scripts/build-app.sh) is the build being checked; without it, the app's own
+# LSMinimumSystemVersion says which.
 #
 # Exits 1 if any check fails. Skips say why.
 # shellcheck disable=SC2015  # `test && pass || fail`: pass always succeeds, so fail runs only when the test fails
@@ -23,11 +26,12 @@ skip() { echo "  skip  $1"; }
 
 echo "tier2: $(sw_vers -productName) $(sw_vers -productVersion), $(xcrun swift -version 2>&1 | head -1 | sed -E 's/.*(Apple Swift version [0-9.]+).*/\1/')"
 
-# --- source floors: macOS 15 for the Mac app, iOS 26.4
-grep -q 'platforms: \[.macOS(.v15), .iOS("26.4")\]' Package.swift \
-    && pass "Package.swift floors: macOS 15, iOS 26.4" || fail "Package.swift floors aren't .macOS(.v15), .iOS(\"26.4\")"
+# --- source floors: the two Mac builds (macOS 15 and 26.4), iOS 26.4
+grep -q 'macOSFloor = .macOS(.v15)' Package.swift && grep -q 'macOSFloor = .macOS("26.4")' Package.swift \
+        && grep -q 'platforms: \[macOSFloor, .iOS("26.4")\]' Package.swift \
+    && pass "Package.swift floors: macOS 15 or 26.4, iOS 26.4" || fail "Package.swift floors aren't macOS 15 / 26.4 and iOS 26.4"
 v="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' Resources/Info.plist 2>/dev/null)"
-[[ "$v" == "15.0" ]] && pass "Resources/Info.plist LSMinimumSystemVersion 15.0" \
+[[ "$v" == "15.0" ]] && pass "Resources/Info.plist LSMinimumSystemVersion 15.0 (build-app.sh sets each build's)" \
     || fail "Resources/Info.plist LSMinimumSystemVersion is '$v', not 15.0"
 
 # --- Package.resolved: the checked-in pins, untouched by a Swift < 6.3 resolution (which drops mlx-swift's pin)
@@ -63,13 +67,31 @@ if [[ ! -x "$bin" ]]; then
     fail "no app at $app (build it: scripts/build-app.sh)"
 else
     v="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist" 2>/dev/null)"
-    [[ "$v" == "15.0" ]] && pass "app Info.plist LSMinimumSystemVersion 15.0" || fail "app Info.plist LSMinimumSystemVersion is '$v'"
+    case "${MACOS_TARGET:-$v}" in
+        26.4) floor=26.4 ;;
+        15|15.0) floor=15.0 ;;
+        *) floor="?" ;;
+    esac
+    echo "  ----  macOS $floor build"
+    [[ "$v" == "$floor" ]] && pass "app Info.plist LSMinimumSystemVersion $floor" \
+        || fail "app Info.plist LSMinimumSystemVersion is '$v', not $floor"
     minos="$(vtool -show-build "$bin" 2>/dev/null | awk '/minos/ {print $2; exit}')"
-    [[ "$minos" == "15.0" ]] && pass "binary deployment target 15.0" || fail "binary deployment target is '$minos', not 15.0"
+    [[ "$minos" == "$floor" ]] && pass "binary deployment target $floor" || fail "binary deployment target is '$minos', not $floor"
 
-    # FoundationModels doesn't exist before macOS 26: a strong link stops the app at launch on 15.
+    # The 26.4 build's low-latency translation model (TranslationSession.Strategy) and nothing of it in the 15 build.
+    # Not `nm | grep -q`: grep stops at the first match, nm dies of SIGPIPE, and pipefail turns that into "absent".
+    if grep -q 'preferredStrategy' <(nm "$bin" 2>/dev/null); then strategies=1; else strategies=0; fi
+    if [[ "$floor" == 26.4 ]]; then
+        (( strategies )) && pass "Apple Translation strategies compiled in" || fail "the 26.4 build has no Apple Translation strategies (TRANSLATION_STRATEGIES unset?)"
+    else
+        (( strategies )) && fail "the 15 build uses Apple Translation strategies, which need macOS 26.4" || pass "no Apple Translation strategies (macOS 26.4 only)"
+    fi
+
+    # FoundationModels doesn't exist before macOS 26: a strong link stops the macOS 15 build at launch on 15. (Every
+    # system the 26.4 build runs on has it.)
     fm="$(otool -L "$bin" | grep FoundationModels.framework || true)"
-    if [[ -z "$fm" ]]; then pass "FoundationModels not linked"
+    if [[ "$floor" == 26.4 ]]; then skip "FoundationModels weak link (the 26.4 build may link it strongly)"
+    elif [[ -z "$fm" ]]; then pass "FoundationModels not linked"
     elif [[ "$fm" == *weak* ]]; then pass "FoundationModels weak-linked"
     else fail "FoundationModels is strongly linked (a macOS 26 API is used without @available)"; fi
 
@@ -85,7 +107,7 @@ else
     llama="$app/Contents/Frameworks/llama.framework/llama"
     lminos="$(vtool -show-build "$llama" 2>/dev/null | awk '/minos/ {print $2; exit}')"
     if [[ -z "$lminos" ]]; then fail "llama.framework missing from the app"
-    elif [[ "$(printf '%s\n15.0\n' "$lminos" | sort -V | tail -1)" == "15.0" ]]; then pass "llama.framework deployment target $lminos"
+    elif [[ "$(printf '%s\n%s\n' "$lminos" "$floor" | sort -V | tail -1)" == "$floor" ]]; then pass "llama.framework deployment target $lminos"
     else fail "llama.framework needs macOS $lminos"; fi
 
     # MLX's shaders: only xcodebuild compiles them (with the Metal toolchain); without them MLX stops at load.

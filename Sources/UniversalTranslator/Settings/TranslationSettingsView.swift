@@ -99,7 +99,7 @@ struct TranslationSettingsView: View {
                             Button("Download…") { requestDownload() }
                         }
                     }
-                    #if compiler(>=6.3)
+                    #if TRANSLATION_STRATEGIES || os(iOS)
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Low-latency model")
@@ -112,14 +112,14 @@ struct TranslationSettingsView: View {
                     }
                     Note("Live captions use the low-latency model (about 30–150 ms per update) when it's downloaded, and the standard model otherwise. The high-fidelity second pass uses the standard model.")
                     #else
-                    Note("Live captions use the standard model. This build (made with the macOS 26.2 SDK) can't use the low-latency model.")
+                    Note("Live captions use the standard model. The low-latency model needs the macOS 26.4 build of Universal Translator.")
                     #endif
                 }
                 .translationTask(downloadConfig) { session in
                     try? await session.prepareTranslation()
                     await refreshAppleStatus()
                 }
-                #if compiler(>=6.3)
+                #if TRANSLATION_STRATEGIES || os(iOS)
                 .translationTask(fastDownloadConfig) { session in
                     try? await session.prepareTranslation()
                     await refreshAppleStatus()
@@ -255,7 +255,7 @@ struct TranslationSettingsView: View {
         }
     }
 
-    #if compiler(>=6.3)
+    #if TRANSLATION_STRATEGIES || os(iOS)
     private func requestFastDownload() {
         if fastDownloadConfig == nil {
             fastDownloadConfig = TranslationSession.Configuration(source: source, target: target, preferredStrategy: .lowLatency)
@@ -276,7 +276,7 @@ struct TranslationSettingsView: View {
     private func refreshAppleStatus() async {
         guard Platform.hasAppleModels else { return }
         appleStatus = await LanguageAvailability().status(from: source, to: target)
-        #if compiler(>=6.3)
+        #if TRANSLATION_STRATEGIES || os(iOS)
         fastStatus = await LanguageAvailability(preferredStrategy: .lowLatency).status(from: source, to: target)
         #endif
     }

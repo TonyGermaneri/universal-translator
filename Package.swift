@@ -10,9 +10,35 @@ let legacyToolchainOverrides: [Package.Dependency] = []
 let legacyToolchainOverrides: [Package.Dependency] = [.package(path: ".build/vendor/mlx-swift")]
 #endif
 
+// Two builds of the Mac app, chosen with MACOS_TARGET:
+//
+//   26.4 (default)  needs macOS 26.4, and uses Apple Translation's strategies (the low-latency model), which only
+//                   exist from macOS 26.4: the TRANSLATION_STRATEGIES compilation condition.
+//   15              runs on macOS 15 and later, without the strategies (the standard Apple Translation model only).
+//
+// Swift < 6.3 (Xcode 26.3) ships the macOS 26.2 SDK, which has no strategies, so it always makes the macOS 15 build.
+// The iOS app (iOS 26.4) always has the strategies; see `os(iOS)` next to TRANSLATION_STRATEGIES in the sources.
+#if compiler(>=6.3)
+let macOSTarget = Context.environment["MACOS_TARGET"] ?? "26.4"
+#else
+let macOSTarget = "15"
+#endif
+let macOSFloor: SupportedPlatform
+let appSettings: [SwiftSetting]
+switch macOSTarget {
+case "26.4":
+    macOSFloor = .macOS("26.4")
+    appSettings = [.swiftLanguageMode(.v5), .define("TRANSLATION_STRATEGIES")]
+case "15":
+    macOSFloor = .macOS(.v15)
+    appSettings = [.swiftLanguageMode(.v5)]
+default:
+    fatalError("MACOS_TARGET must be 26.4 or 15, not \(macOSTarget)")
+}
+
 let package = Package(
     name: "UniversalTranslator",
-    platforms: [.macOS(.v15), .iOS("26.4")],
+    platforms: [macOSFloor, .iOS("26.4")],
     products: [
         .executable(name: "UniversalTranslator", targets: ["UniversalTranslator"]),
         // Everything the iPhone and iPad app (iOS/UniversalTranslator.xcodeproj) links.
@@ -58,7 +84,7 @@ let package = Package(
         .executableTarget(
             name: "UniversalTranslator",
             dependencies: ["TranslatorCore", "LocalLLM", "LocalMLX", .product(name: "FluidAudio", package: "FluidAudio")],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: appSettings
         ),
         // The libraries the iOS app's Xcode project links, as one product: the project compiles the app's shared
         // sources itself, and a project-level FluidAudio reference couldn't leave out its default traits.

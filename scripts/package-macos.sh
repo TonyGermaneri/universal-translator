@@ -14,19 +14,32 @@
 #                     the App Store Connect API key's ID and issuer, with the key itself as either
 #   NOTARY_KEY_PATH   the AuthKey_XXXXXXXXXX.p8 file, or
 #   NOTARY_KEY_P8     its contents (the PEM text, or base64 of the file)
+#   MACOS_TARGET      26.4 (default) or 15, which of the two Mac builds to make (scripts/build-app.sh). A release
+#                     runs this once for each.
 #
-# Leaves dist/Universal-Translator-<version>-macOS.zip, dist/SHA256SUMS.txt, and dist/signing.txt ("notarized",
-# "signed" or "ad-hoc"), which the release notes read so they describe the build that was actually made.
+# Leaves dist/Universal-Translator-<version>-macOS.zip (the macOS 26.4 build) or
+# dist/Universal-Translator-<version>-macOS15.zip (the macOS 15 build), dist/SHA256SUMS.txt for every zip in dist/,
+# and dist/signing.txt ("notarized", "signed" or "ad-hoc"), which the release notes read so they describe the build
+# that was actually made. A zip of the other build already in dist/ is kept, so both can be published together.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 version="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 notarize="${NOTARIZE:-auto}"
+# The default follows the toolchain, as in scripts/build-app.sh: Swift < 6.3 can only make the macOS 15 build.
+read -r swift_major swift_minor <<< "$(xcrun swift -version 2>&1 | sed -nE 's/.*Apple Swift version ([0-9]+)\.([0-9]+).*/\1 \2/p')"
+if (( swift_major < 6 || (swift_major == 6 && swift_minor < 3) )); then target="${MACOS_TARGET:-15}"
+else target="${MACOS_TARGET:-26.4}"; fi
+case "$target" in
+    26.4) suffix=macOS ;;
+    15) suffix=macOS15 ;;
+    *) echo "MACOS_TARGET must be 26.4 or 15, not $target" >&2; exit 1 ;;
+esac
 dist=dist
 app="$dist/Universal Translator.app"
-zip="$dist/Universal-Translator-$version-macOS.zip"
+zip="$dist/Universal-Translator-$version-$suffix.zip"
 
-echo "==> Universal Translator $version"
+echo "==> Universal Translator $version (macOS $target build)"
 
 # ------------------------------------------------------------------------------------------- signing identity
 
@@ -88,14 +101,14 @@ fi
 
 # ------------------------------------------------------------------------------------------------ build
 
-rm -rf "$app" "$dist"/Universal-Translator-*-macOS.zip "$dist/SHA256SUMS.txt" "$dist/signing.txt"
+rm -rf "$app" "$dist"/Universal-Translator-*-"$suffix".zip "$dist/SHA256SUMS.txt" "$dist/signing.txt"
 mkdir -p "$dist"
 
 # A version from a tag goes into the app; anything else (a commit, "dev") keeps the one in Info.plist.
 plist_version=""
 [[ "$version" =~ ^v?[0-9]+(\.[0-9]+){0,2}(-.*)?$ ]] && plist_version="$version"
 # The zip's name is also what the app's About shows (BUILD_DESCRIBE).
-OUT_DIR="$dist" SIGN_IDENTITY="$identity" VERSION="$plist_version" BUILD_DESCRIBE="$version" \
+MACOS_TARGET="$target" OUT_DIR="$dist" SIGN_IDENTITY="$identity" VERSION="$plist_version" BUILD_DESCRIBE="$version" \
     SECURE_TIMESTAMP="$([[ "$identity" == "-" ]] && echo 0 || echo 1)" scripts/build-app.sh
 
 echo "    $(lipo -archs "$app/Contents/MacOS/UniversalTranslator"), version" \
@@ -139,5 +152,5 @@ elif [[ "$identity" != "-" ]]; then echo signed
 else echo ad-hoc
 fi > "$dist/signing.txt"
 
-(cd "$dist" && shasum -a 256 "$(basename "$zip")" > SHA256SUMS.txt)
+(cd "$dist" && shasum -a 256 Universal-Translator-*.zip > SHA256SUMS.txt)
 echo "==> $zip ($(du -h "$zip" | cut -f1), $(cat "$dist/signing.txt"))"

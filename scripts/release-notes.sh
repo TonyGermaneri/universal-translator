@@ -22,7 +22,12 @@ translated into your language over everything on screen. Speech recognition and 
 Unzip, move **Universal Translator.app** to Applications, and open it. It lives in the menu bar; the first time
 you start listening, macOS asks for permission to use the microphone, speech recognition, or system audio.
 
-Needs a Mac with Apple silicon and macOS 26.4 or later.
+Needs a Mac with Apple silicon. There are two downloads:
+
+- **Universal-Translator-…-macOS.zip**: macOS 26.4 or later. Includes Apple Translation's low-latency model for
+  live captions.
+- **Universal-Translator-…-macOS15.zip**: macOS 15 or later. Apple Translation (on macOS 26) uses its standard
+  model only; on macOS 15 there are no Apple engines, so Nemotron and Hy-MT2 do the work.
 EOF
 
 case "$signing" in
