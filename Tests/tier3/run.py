@@ -87,6 +87,11 @@ def launch(env, via_open=False):
     the terminal's (fine for the microphone, but macOS refuses system-audio recording to most terminals)."""
     env = dict(env, UT_DEFAULTS_SUITE=SUITE)
     if via_open:
+        # An app started by `open` runs from /, so a relative path in its environment points nowhere: seen
+        # 2026-11-13, `--keep .build/x` left system_audio's log unwritten and the test reported nothing heard.
+        relative = [f"{k}={v}" for k, v in env.items() if "/" in v and not os.path.isabs(v)]
+        if relative:
+            raise ValueError(f"relative paths for an app started with open: {', '.join(relative)}")
         args = ["open", "-n"]
         for k, v in env.items():
             args += ["--env", f"{k}={v}"]
@@ -718,6 +723,11 @@ TAP_TEXT = "Where is the nearest train station? How long does it take to get the
 
 
 def test_system_audio(work, args):
+    try:
+        launch({"UT_DEBUG_LOG": ".build/relative/tap.log"}, via_open=True)
+        raise AssertionError("an app started with open was given a relative log path")
+    except ValueError:
+        pass
     require_models(*NEEDED.items(), LIVE["llamaCpp"])
     settings(audioSource="systemAudio")
     audio, log = os.path.join(work, "tap.aiff"), os.path.join(work, "tap.log")
@@ -784,7 +794,7 @@ def main():
     if subprocess.run(["pgrep", "-x", "UniversalTranslator"], capture_output=True).returncode == 0:
         sys.exit("Universal Translator is running (another tier3 run, or the app itself): quit it first")
 
-    work = args.keep or tempfile.mkdtemp(prefix="ut-tier3-")
+    work = os.path.abspath(args.keep) if args.keep else tempfile.mkdtemp(prefix="ut-tier3-")
     os.makedirs(work, exist_ok=True)
     print(f"tier3: macOS {platform.mac_ver()[0]}, logs in {work}")
     results = []
