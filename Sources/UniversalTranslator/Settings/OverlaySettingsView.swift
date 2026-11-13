@@ -38,6 +38,10 @@ struct AppearanceSettings: View {
                 .pickerStyle(.segmented)
             }
 
+            #if os(macOS)
+            ReadingAidSection()
+            #endif
+
             Section("Outline & shadow") {
                 SliderRow(title: "Outline width", value: $store.settings.overlay.strokeWidth, range: 0...6, step: 0.5,
                           format: { $0 == 0 ? "Off" : String(format: "%.1f pt", $0) })
@@ -126,14 +130,11 @@ struct LayoutSettings: View {
             #if os(macOS)
             Section {
                 HStack {
-                    Button(store.settings.overlay.clickThrough ? "Unlock to drag & resize" : "Lock in place") {
-                        app.overlay.toggleLock()
-                    }
                     Button("Preview") { app.showSampleCaptions() }
                     Spacer()
                     Button("Reset overlay", role: .destructive) { store.resetOverlay() }
                 }
-                Note("When unlocked, drag the overlay anywhere and use the ↔ handle to change its width. Lock it again so clicks pass through to the apps underneath.")
+                Note("To move the captions, hover over them and drag the grip that appears above them, onto another display too; its ↔ end changes their width (a full-width ticker moves only up and down until it's narrower). The captions themselves never catch clicks. Preview (or Show Sample Captions in the Dock icon's menu) puts captions on screen to move.")
             }
             #else
             Section {
@@ -219,7 +220,7 @@ struct LayoutSettings: View {
                 Picker("Stay on top of", selection: $store.settings.overlay.level) {
                     ForEach(OverlayLevel.allCases) { Text($0.title).tag($0) }
                 }
-                Toggle("Click-through (locked)", isOn: $store.settings.overlay.clickThrough)
+                Toggle("Lock position (no move grip on hover)", isOn: $store.settings.overlay.lockPosition)
                 Toggle("Show on all Spaces", isOn: $store.settings.overlay.allSpaces)
                 Toggle("Hide from screen recording and screen sharing", isOn: $store.settings.overlay.hideFromScreenCapture)
                 Toggle("Hide automatically when idle", isOn: $store.settings.overlay.autoHide)

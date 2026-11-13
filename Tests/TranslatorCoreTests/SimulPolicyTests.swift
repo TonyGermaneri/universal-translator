@@ -224,6 +224,32 @@ import Testing
         #expect(s.tokens.count == 12) // everything stable, not the unstable tail
     }
 
+    private func ja(_ words: [String]) -> [Token] {
+        words.enumerated().map { Token(text: $1, start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.25, isFinal: false) }
+    }
+
+    /// Japanese, Chinese and Korean captions wait for the clause: English made from half a Japanese clause was
+    /// wrong and stayed on screen ("会議にご参加いただき…" → "Please attend the meeting"; 2026-10-26).
+    @Test func clauseGatedSpeechWaitsForTheClause() {
+        var f = SourceFrontier(holdBack: 0, clauseGated: true)
+        let half = ja(["そう", "で", "なけれ", "ば", "クエリ", "を", "実行", "し、", "結果", "を"])
+        #expect(f.currentSentence(pending: half, stableCount: 10, now: 0).text == "そうでなければクエリを実行し、")
+        #expect(f.currentSentence(pending: Array(half.prefix(7)), stableCount: 7, now: 0).tokens.isEmpty)
+        // Without the gate (English and the rest), every stable word is handed over.
+        var open = SourceFrontier(holdBack: 0)
+        #expect(open.currentSentence(pending: half, stableCount: 10, now: 0).tokens.count == 10)
+        #expect(SourceFrontier.waitsForClauses(in: "ja-JP") && SourceFrontier.waitsForClauses(in: "zh-TW")
+                && SourceFrontier.waitsForClauses(in: "ko-KR") && !SourceFrontier.waitsForClauses(in: "en-US")
+                && !SourceFrontier.waitsForClauses(in: "de-DE"))
+    }
+
+    @Test func clauseGateGivesWayToALongStretchWithoutCommas() {
+        var f = SourceFrontier(holdBack: 0, clauseGated: true, clauseFallbackWords: 4)
+        let words = ja(["毎日", "実際", "に", "製品", "を", "使っ", "て", "いる", "人", "たち"])   // 17 characters ≈ 9 words
+        #expect(f.currentSentence(pending: Array(words.prefix(3)), stableCount: 3, now: 0).tokens.isEmpty)
+        #expect(f.currentSentence(pending: words, stableCount: 10, now: 0).tokens.count == 10)
+    }
+
     @Test func keepsAgesAfterConsumingASentence() {
         var f = SourceFrontier(holdBack: 0.25)
         let pending = ["a", "b", "c", "d"].enumerated().map { tok($1, false, at: $0) }

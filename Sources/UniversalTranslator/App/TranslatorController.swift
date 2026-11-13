@@ -16,12 +16,23 @@ final class TranslatorController {
     private var isTransitioning = false
     private var restartWork: DispatchWorkItem?
     var onStateChange: (() -> Void)?
+    /// The session's transcript file, when saving it is on.
+    let transcript = TranscriptAutosave()
 
     init(settings: SettingsStore, captions: CaptionStore) {
         self.settings = settings
         self.captions = captions
         translation = LiveTranslationController(captions: captions, settings: settings)
         settings.observe { [weak self] old, new in self?.settingsChanged(old, new) }
+        captions.onFinishedSentenceChange = { [weak self] s in
+            self?.transcript.record(id: s.id, started: s.startedAt, source: s.source, translation: s.committed)
+        }
+    }
+
+    /// A transcript file per listening session (start to stop; pauses and engine restarts don't split it).
+    private func beginTranscript(_ s: AppSettings) {
+        guard s.saveTranscript else { return }
+        transcript.begin(languages: "\(LanguageNames.name(s.sourceLocale)) → \(LanguageNames.name(s.targetLanguage))")
     }
 
     func toggle() {
@@ -41,6 +52,7 @@ final class TranslatorController {
         guard !isListening, !isTransitioning else { return }
         isTransitioning = true
         isListening = true
+        beginTranscript(settings.settings)
         onStateChange?()
         Task {
             await startEngine()
@@ -54,6 +66,7 @@ final class TranslatorController {
         isTransitioning = true
         Task {
             await stopEngine()
+            transcript.end()
             isTransitioning = false
             onStateChange?()
         }
@@ -62,13 +75,9 @@ final class TranslatorController {
     private func startEngine() async {
         captions.status = .preparing("Preparing translation…")
         do {
+            try checkRequiredModels()
             try await translation.configure()
-            let recognizer: SpeechRecognizer = switch settings.settings.recognizer {
-            case .appleSpeech: AppleRecognizer()
-            case .nemotron:
-                LocalModelStore.shared.isDownloaded(.nemotron(for: settings.settings.sourceLocale))
-                    ? NemotronRecognizer() : AppleRecognizer()
-            }
+            let recognizer = makeRecognizer()
             DebugLog.write("RECOGNIZER \(recognizer.name)")
             let engine = SpeechPipeline(settings: settings, captions: captions, translation: translation,
                                         recognizer: recognizer)
@@ -77,12 +86,45 @@ final class TranslatorController {
             log.info("Listening")
         } catch {
             log.error("Start failed: \(error.localizedDescription, privacy: .public)")
+            DebugLog.write("START failed: \(error.localizedDescription)")
             await engine?.stop()
             engine = nil
             isListening = false
             captions.status = .error(error.localizedDescription)
             captions.touch()
         }
+    }
+
+    private func makeRecognizer() -> SpeechRecognizer {
+        let kind = Self.recognizer(chosen: settings.settings.recognizer,
+                                   nemotronReady: LocalModelStore.shared.isDownloaded(.nemotron(for: settings.settings.sourceLocale)),
+                                   hasAppleModels: Platform.hasAppleModels)
+        if #available(macOS 26, *), kind == .appleSpeech { return AppleRecognizer() }
+        // Before macOS 26 Nemotron is the only recognizer; `checkRequiredModels()` made sure it's downloaded.
+        return NemotronRecognizer()
+    }
+
+    /// Apple Speech when it's chosen or while Nemotron isn't downloaded, if the system has it; otherwise Nemotron.
+    nonisolated static func recognizer(chosen: SpeechRecognizerKind, nemotronReady: Bool, hasAppleModels: Bool) -> SpeechRecognizerKind {
+        hasAppleModels && (chosen == .appleSpeech || !nemotronReady) ? .appleSpeech : .nemotron
+    }
+
+    /// Before macOS 26 there's no Apple Speech or Translation to use while Nemotron or Hy-MT2 isn't downloaded, so
+    /// listening needs them first.
+    private func checkRequiredModels() throws {
+        guard !Platform.hasAppleModels else { return }
+        let missing = Self.requiredModels(for: settings.settings).filter { !LocalModelStore.shared.isDownloaded($0) }
+        if !missing.isEmpty { throw EngineError.modelsRequired(missing.map(\.name)) }
+    }
+
+    /// The downloads listening needs where nothing can stand in for them (before macOS 26): Nemotron for the speech
+    /// language, and the live Hy-MT2 model when it's the live translator.
+    nonisolated static func requiredModels(for s: AppSettings) -> [LocalModel] {
+        var required: [LocalModel] = [.nemotron(for: s.sourceLocale)]
+        if s.translation.backend == .localLLM || s.translation.backend.needsAppleModels {
+            required.append(.live(s.translation.localEngine))
+        }
+        return required
     }
 
     private func stopEngine() async {
@@ -98,6 +140,9 @@ final class TranslatorController {
     private func settingsChanged(_ old: AppSettings, _ new: AppSettings) {
         if case .error = captions.status, !isListening { captions.status = .idle }
         guard isListening else { return }
+        if old.saveTranscript != new.saveTranscript {
+            if new.saveTranscript { beginTranscript(new) } else { transcript.end() }
+        }
         let needsRestart = old.sourceLocale != new.sourceLocale
             || old.recognizer != new.recognizer
             || old.targetLanguage != new.targetLanguage

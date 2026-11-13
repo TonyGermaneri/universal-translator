@@ -76,6 +76,43 @@ private func words(_ text: String, start: Double = 0, final: Bool = true) -> [To
         #expect(t.map(\.text) == ["Hi", " there"])
     }
 
+    private func spaceless(_ text: String, end: Double = 1, final: Bool = false, locale: String? = "ja-JP") -> [Token] {
+        Tokenizer.tokens(from: [TimedPiece(text: text, start: 0, end: end)], isFinal: final, fallbackStart: 0,
+                         fallbackEnd: end, locale: locale)
+    }
+
+    /// Text without spaces is split into words (by the system's tokenizer), losslessly, with punctuation kept on
+    /// the word before it. Seen 2026-10-25: split at spaces only, a Japanese utterance was one word, so no caption
+    /// showed until the speaker paused.
+    @Test func splitsSpacelessScriptsIntoWords() {
+        for (text, locale) in [("皆さん、おはようございます。", "ja-JP"), ("大家早上好，感谢各位参加这次电话会议。", "zh-CN"),
+                               ("感謝各位參加這次電話會議", "zh-TW"), ("今日は200ミリ秒です", nil)] {
+            let t = spaceless(text, locale: locale)
+            #expect(t.count >= 3, "\(text): \(t.map(\.text))")
+            #expect(t.map(\.text).joined() == text)
+            #expect(!t.contains { $0.text.first.map { "、。，！？".contains($0) } ?? true }, "\(t.map(\.text))")
+            #expect(zip(t, t.dropFirst()).allSatisfy { $0.end <= $1.start + 1e-9 } && abs(t.last!.end - 1) < 1e-9)
+        }
+        #expect(spaceless("会議にご参加").map(\.text).prefix(2) == ["会議", "に"])
+        // Words with spaces are left as they were.
+        #expect(spaceless("Hello world,", locale: "ja-JP").map(\.text) == ["Hello", " world,"])
+    }
+
+    /// Nemotron's in-progress Japanese grows with each hypothesis; the words two hypotheses share become stable,
+    /// and the frontier hands them over before the utterance ends.
+    @Test func growingSpacelessHypothesisBecomesStable() {
+        var buffer = TranscriptBuffer()
+        buffer.applyVolatile(spaceless("会議にご", end: 0.6))
+        buffer.applyVolatile(spaceless("会議にご参加いただきありがとう", end: 1.7))
+        #expect(buffer.pending().stableCount >= 2)
+        var frontier = SourceFrontier()
+        let (pending, stable) = buffer.pending()
+        _ = frontier.currentSentence(pending: pending, stableCount: stable, now: 2.0)
+        let sentence = frontier.currentSentence(pending: pending, stableCount: stable, now: 2.5)
+        #expect(sentence.text.hasPrefix("会議に"))
+        #expect(!sentence.isComplete)
+    }
+
     @Test func volatilePrefixNeedsAgreement() {
         var buffer = TranscriptBuffer()
         buffer.applyVolatile(words("we should go", final: false))
@@ -210,6 +247,25 @@ private func words(_ text: String, start: Double = 0, final: Bool = true) -> [To
     @Test func stripsReasoningAndQuotes() {
         #expect(Prompts.stripReasoning("<think>x</think>\n\"Hola\"") == "Hola")
         #expect(Prompts.stripReasoning("「こんにちは」") == "こんにちは")
+    }
+
+    @Test func repeatedContextIsStrippedFromTheEnd() {
+        let context = [TranslationContext(source: "一番近い駅はどこですか", translation: "Where is the nearest station?"),
+                       TranslationContext(source: "どのくらいかかりますか", translation: "How long does it take?")]
+        let source = "この近くでおすすめのランチの場所はありますか"
+        #expect(ContextEcho.strip("Is there a lunch place nearby? How long does it take?", source: source,
+                                  context: context, isFinal: true) == "Is there a lunch place nearby?")
+        // A partial that is nothing but context shows nothing new; a final keeps what it has.
+        let echo = "Where is the nearest station? How long does it take?"
+        #expect(ContextEcho.strip(echo, source: "この近くで", context: context, isFinal: false) == "")
+        #expect(ContextEcho.strip(echo, source: "この近くで", context: context, isFinal: true) == echo)
+        // Text already on screen stays; so does a sentence the speaker really said again.
+        #expect(ContextEcho.strip("How long does it take?", source: "x", context: context,
+                                  prefix: "How long does it take?", isFinal: false) == "How long does it take?")
+        #expect(ContextEcho.strip("Yes. How long does it take?", source: "はい。どのくらいかかりますか", context: context,
+                                  isFinal: true) == "Yes. How long does it take?")
+        #expect(ContextEcho.strip("Is there a place nearby?", source: source, context: context, isFinal: true)
+                == "Is there a place nearby?")
     }
 
     @Test func hyMT2PromptFormats() {

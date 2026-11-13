@@ -41,19 +41,23 @@ public enum Tokenizer {
     ///
     /// A run that holds several words has its time range divided across them in proportion to their length.
     /// Runs without timing inherit from their neighbours, bounded by `fallbackStart...fallbackEnd`
-    /// (the time range of the whole recognizer result).
+    /// (the time range of the whole recognizer result). Text in a script written without spaces (Japanese,
+    /// Chinese, Thai) is split into words by the system's word tokenizer for `locale` (the speech language):
+    /// split at spaces only, a whole utterance would be one word that changes with every hypothesis and never
+    /// becomes stable, so nothing would be translated until the speaker paused.
     public static func tokens(
         from pieces: [TimedPiece],
         isFinal: Bool,
         fallbackStart: Double,
-        fallbackEnd: Double
+        fallbackEnd: Double,
+        locale: String? = nil
     ) -> [Token] {
         var tokens: [Token] = []
         var pendingWhitespace = ""
         var cursor = fallbackStart
 
         for piece in pieces {
-            let words = splitKeepingLeadingSpace(pendingWhitespace + piece.text)
+            let words = splitKeepingLeadingSpace(pendingWhitespace + piece.text).flatMap { splitSpaceless($0, locale: locale) }
             pendingWhitespace = ""
             guard !words.isEmpty else {
                 // Whitespace-only run: carry it onto the next word.
@@ -78,7 +82,7 @@ public enum Tokenizer {
     }
 
     /// "  hello world," -> ["  hello", " world,"]. Whitespace-only input yields no words.
-    static func splitKeepingLeadingSpace(_ s: String) -> [String] {
+    public static func splitKeepingLeadingSpace(_ s: String) -> [String] {
         var result: [String] = []
         var current = ""
         var sawNonSpace = false
@@ -97,6 +101,35 @@ public enum Tokenizer {
         }
         if sawNonSpace { result.append(current) }
         return result
+    }
+
+    /// "皆さん、おはようございます" -> ["皆さん、", "おはよう", "ござい", "ます"]: words of a spaceless script, each
+    /// keeping the punctuation after it (and the first, any whitespace before it), so they re-join losslessly.
+    /// Text without such characters is returned as it is.
+    public static func splitSpaceless(_ word: String, locale: String?) -> [String] {
+        guard word.unicodeScalars.contains(where: TextJoiner.isSpacelessScript) else { return [word] }
+        let ns = word as NSString
+        let language = locale.map { Locale(identifier: $0) } ?? Locale(identifier: guessedLanguage(word))
+        let tokenizer = CFStringTokenizerCreate(nil, word as CFString, CFRange(location: 0, length: ns.length),
+                                                kCFStringTokenizerUnitWord, language as CFLocale)
+        var starts: [Int] = []
+        while CFStringTokenizerAdvanceToNextToken(tokenizer) != [] {
+            let range = CFStringTokenizerGetCurrentTokenRange(tokenizer)
+            if range.location > (starts.last ?? -1) { starts.append(range.location) }
+        }
+        guard starts.count > 1 else { return [word] }
+        starts[0] = 0
+        return starts.indices.map { i in
+            let end = i + 1 < starts.count ? starts[i + 1] : ns.length
+            return ns.substring(with: NSRange(location: starts[i], length: end - starts[i]))
+        }
+    }
+
+    /// The tokenizer language for spaceless text when the speech language isn't known.
+    private static func guessedLanguage(_ text: String) -> String {
+        if text.unicodeScalars.contains(where: { (0x3040...0x30FF).contains($0.value) }) { return "ja" }
+        if text.unicodeScalars.contains(where: { (0x0E00...0x0E7F).contains($0.value) }) { return "th" }
+        return "zh-Hans"
     }
 }
 

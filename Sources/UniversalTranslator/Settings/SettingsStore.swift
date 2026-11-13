@@ -70,6 +70,7 @@ final class SettingsStore {
         let stored = try JSONSerialization.jsonObject(with: data)
         let merged = merge(defaultsObject, stored)
         return try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: merged))
+            .withoutUnavailableEngines()
     }
 
     private static func merge(_ base: Any, _ overlay: Any) -> Any {

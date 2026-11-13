@@ -83,6 +83,8 @@ final class SpeechPipeline: SpeechEngine {
     func start() async throws {
         let s = settings.settings
         guard await AudioCapture.requestPermission(for: s.audioSource) else { throw EngineError.microphoneDenied }
+        let memory = MemoryEstimate.of(s)
+        DebugLog.write("MEMORY estimate \(memory.bytes) of \(memory.physicalMemory)")   // checked by tier3
         let status: (String) -> Void = { [weak self] message in self?.captions.status = .preparing(message) }
 
         let terms = s.translation.glossary.map(\.source).filter { !$0.isEmpty }
@@ -92,7 +94,7 @@ final class SpeechPipeline: SpeechEngine {
         endpointer = Endpointer(sensitivity: s.micSensitivity, timing: s.timing, vad: vad, turnModel: turnModel)
 
         transcript.reset()
-        frontier = SourceFrontier()
+        frontier = SourceFrontier(clauseGated: SourceFrontier.waitsForClauses(in: s.sourceLocale))
         applyTiming(s.timing)
         boundary = nil
         handledTurnEnd = -1
@@ -172,7 +174,8 @@ final class SpeechPipeline: SpeechEngine {
     private func handle(_ result: RecognizerResult) {
         lastResultAt = ProcessInfo.processInfo.systemUptime
         let tokens = Tokenizer.tokens(from: result.pieces, isFinal: result.isFinal,
-                                      fallbackStart: result.start, fallbackEnd: result.end)
+                                      fallbackStart: result.start, fallbackEnd: result.end,
+                                      locale: settings.settings.sourceLocale)
         DebugLog.write(String(format: "%@ %.2f-%.2f now=%.2f | %@", result.isFinal ? "FINAL   " : "volatile", result.start,
                               result.end, latest.time, result.text))
         if result.isFinal {
@@ -275,7 +278,8 @@ final class SpeechPipeline: SpeechEngine {
             boundary = nil // the turn's words have all been handed over
         }
         translation.update(sentence, speechEndedAgo: sentence.isComplete ? speechEndedAgo : nil,
-                           speechEnd: sentence.isComplete ? speechEnd(of: sentence) : nil)
+                           speechEnd: sentence.isComplete ? speechEnd(of: sentence) : nil,
+                           speechStartedAgo: pending.first.map { latest.time - $0.start })
         let rest = pending.dropFirst(sentence.tokens.count).map(\.text).joined()
         captions.liveSource = rest.trimmingCharacters(in: .whitespacesAndNewlines)
     }

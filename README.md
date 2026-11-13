@@ -15,9 +15,9 @@ There is also an [iPhone and iPad app](#iphone-and-ipad) with the same engine. I
 
 ## Requirements
 
-- macOS 26.4 or later on Apple silicon (developed on macOS 27, M3 Max)
-- Xcode 27 (Swift 6.2+). The build uses `xcodebuild`, which compiles MLX's Metal shaders. On a fresh Xcode install, run `sudo xcodebuild -runFirstLaunch` and `xcodebuild -downloadComponent MetalToolchain` once.
-- Disk for on-device models, all downloaded from within the app:
+- macOS 15 or later on Apple silicon (developed on macOS 27, M3 Max; tested on macOS 15.8, M4). Apple Speech, Apple Translation and the Apple Intelligence model need macOS 26 (Apple Translation's low-latency model, 26.4); on macOS 15, Nemotron and Hy-MT2 (or LM Studio) do all the work, so they must be downloaded before the first session.
+- Xcode 27 (Swift 6.2+), or Xcode 26.3 on macOS 15 (the build scripts take care of it). The build uses `xcodebuild`, which compiles MLX's Metal shaders. On a fresh Xcode install, run `sudo xcodebuild -runFirstLaunch` and `xcodebuild -downloadComponent MetalToolchain` once.
+- Disk for on-device models, all downloaded from within the app (or, where a network proxy blocks that, by hand with the commands under each model's "Download it yourself", then chosen in Settings; every file is checked against a pinned SHA-256 either way):
 
   | Model | Size | Use |
   | --- | --- | --- |
@@ -36,6 +36,9 @@ scripts/build-app.sh --run      # …and launches it
 scripts/build-app.sh --install  # …copies it to /Applications and launches it
 swift test                      # unit tests: policy, transcript alignment, frontier, turns, revisions, prompts, reading speed
 scripts/evaluate.py --target ja # end-to-end latency, stability and accuracy report (see below)
+Tests/tier1/run.sh              # the unit tests, safe on Xcode 26.3 too (keeps Package.resolved as committed)
+Tests/tier2/check.sh --network  # build and Mac health (build-app.sh runs it without --network)
+Tests/tier3/run.py --speaker    # the built app, live: first run, Dock, both engines, system audio, microphone
 ```
 
 The script signs with the first *Developer ID Application* or *Apple Development* identity in your keychain (override with `SIGN_IDENTITY`; change the bundle id with `BUNDLE_ID`). A stable signature means macOS keeps the microphone and system-audio permissions across rebuilds.
@@ -44,6 +47,29 @@ On first launch the Settings window opens:
 1. Under **General**, download the **NVIDIA Nemotron** speech model. Apple Speech is used until it's downloaded.
 2. Under **Translation**, download **Hy-MT2 1.8B** and, optionally, **Hy-MT2 7B**. Apple Translation is used until then.
 3. Click **Start Listening** or press **⌃⌥⌘T**.
+
+On macOS 15 there's no Apple Speech or Apple Translation to fall back on: Settings → General lists the models to download under **Before you start**, and listening starts once they're in place.
+
+### Keeping macOS 15 working
+
+macOS 26 is the reference; macOS 15 gets the same app without Apple's engines. When changing code:
+
+- **macOS 26 APIs** (SpeechAnalyzer, the direct `TranslationSession` initializer, FoundationModels, …): gate them with `@available`/`#available(macOS 26, *)` or `Platform.hasAppleModels`, and give macOS 15 a Nemotron/Hy-MT2 path or hide the feature. On macOS 15 never fall back to an Apple engine; throw or turn the feature off instead (see `EngineError.modelsRequired`, the `selectable` engine lists and `AppSettings.withoutUnavailableEngines()`). Building on macOS 15 lists every miss as "is only available in macOS 26.0 or newer".
+- **macOS 26.4 SDK APIs** (such as `TranslationSession.Strategy`): wrap them in `#if compiler(>=6.3)`, since Xcode 26.3 ships the 26.2 SDK. `AppleTranslator` has a short `#else` copy for that case; keep the two in step.
+- **FoundationModels stays weak-linked**, because it doesn't exist on macOS 15. Tier 2 checks it on every build.
+- **Floors:** `.macOS(.v15)` in Package.swift and `LSMinimumSystemVersion` 15.0 in Resources/Info.plist. iOS stays at 26.4; the iOS project compiles most of `Sources/UniversalTranslator`, so shared code must still build for iOS.
+
+On macOS 15 the newest Xcode is 26.3 (Swift 6.2). mlx-swift's manifest asks for Swift tools 6.3 (for a Linux-only feature), so `scripts/build-app.sh` and `Tests/tier1/run.sh` use a local copy of the pinned revision with only that line lowered (`scripts/vendor-mlx-swift.sh`) and put back Package.resolved, which resolving on Swift 6.2 rewrites. After a bare `swift test` or `xcodebuild` on macOS 15, run `git checkout Package.resolved`.
+
+CI builds on macOS 26 only, so the macOS 15 path is checked on a macOS 15 Mac with three test tiers:
+
+| Tier | Command | Checks | When |
+| --- | --- | --- | --- |
+| 1 | `Tests/tier1/run.sh` | Unit tests, including the app's engine choices on both systems: each decision takes `hasAppleModels`, so one Mac checks the macOS 15 and macOS 26 answers. `Tests/tier1/mutate.py SPEC.json` breaks each listed decision in turn and reports any that no test caught. | Every change (seconds) |
+| 2 | `Tests/tier2/check.sh [--network]` | Build and Mac health: floors, Package.resolved pins, the vendored mlx-swift, deployment target, weak FoundationModels, MLX shaders, signature, build stamp. `--network` checks that model downloads get through a TLS-inspecting proxy. | Every build (`build-app.sh` runs it) |
+| 3 | `Tests/tier3/run.py [--quick] [--speaker]` | The built app, live (about 20 minutes): first-run gate, Dock, overlay on each display, hover grip, reading aids, model import, transcript file, both engines, Japanese/Chinese/Korean → English limits, second pass, system audio, microphone (`--speaker` plays speech aloud). | Before changes to engines, audio or windows |
+
+Tier 3 needs the models downloaded (Nemotron Latin and multilingual, Silero VAD, Smart Turn, both Hy-MT2 1.8B builds) and refuses to run while any copy of the app is running. A bug found while running the app gets a test in the tier that would have caught it.
 
 ## iPhone and iPad
 
@@ -153,6 +179,20 @@ The Hy-MT2 models run on **llama.cpp** (default) or **MLX** (Settings → Transl
 
 Japanese flickers more because its verb comes last, so provisional words change more often. Speed depends on what else is using the GPU.
 
+### Measured the other way: speech in Japanese, Chinese or Korean → English captions
+
+M4, `scripts/evaluate.py --source <locale> --revision off`, the same four passages spoken by the macOS voices, scored against the English passages (llama.cpp; MLX's chrF is within two points, its final captions 90–150 ms later). English → Japanese on the same Mac for comparison.
+
+| Speech → captions | Recognition error | First caption after the speaker starts | Final caption after speech ends | chrF vs reference | Script alone (`--script-only`, no speech) |
+| --- | --- | --- | --- | --- | --- |
+| English → Japanese | WER 1.2% | 2.0 s | 0.56 s | 50.7 (Japanese characters) | 55.1 |
+| Japanese → English | CER 2.9% | 4.3 s (monologue: 8.1 s) | 0.76 s | 62.6 | 63.3 |
+| Chinese (Mainland) → English | CER 1.1% | 3.5 s | 0.47 s | 62.8 | 68.3 |
+| Chinese (Taiwan) → English | CER 3.7% | 3.4 s | 0.52 s | 60.3 | 68.8 |
+| Korean → English | WER 11.2% (CER 0.8%: spacing) | 5.0 s | 0.54 s | 64.4 | 65.6 |
+
+Japanese, Chinese and Korean captions come a clause at a time: the translator gets the speaker's words up to the last comma or full stop (or after 16 words without one). Japanese and Chinese, written without spaces, are split into words first. Word by word was faster (Japanese 2.5 s) but English made from half a clause in a verb-final language was often wrong and stayed on screen (chrF 56.1); waiting for the whole utterance, as before, took 6.3 s on average and 31 s for a 30-second run-on. Japanese turns end on the audio that follows the speaker's pause rather than on inserted silence, which cost the next turn its first word (三月の出荷 → の出荷); its final captions come about 0.26 s later for it. With the Hy-MT2 7B second pass (`--revision localLLMLarge`), the captions as finally shown score 64.6 for Japanese, 64.2 for Chinese and 66.2 for Korean, revised a median 2–3 s after they first appear; the app then uses about 6.4 GB of memory instead of 1.6 GB (Settings → Translation shows the expected memory for the chosen models against your Mac's, as a bar that turns amber and red when little is left for other apps). chrF varies by about 4 between identical runs, because recognition does. Nemotron's own zh-TW setting writes only `<unk>`, so Taiwanese (and Hong Kong) speech is recognized as Mandarin and shown in Traditional characters; its errors are mostly Taiwanese words (快取, 伺服器).
+
 ## The overlay
 
 A borderless, non-activating `NSPanel` that never takes focus.
@@ -203,10 +243,14 @@ The menu bar menu shows whether anything leaves the Mac. It also switches what t
 - end-of-turn detection delay, and how many turns the model decided;
 - normalized erasure (NE: visible characters taken back), overall and for committed text;
 - replaced finals and accepted revisions;
-- the recognizer's word error rate against the script.
+- the recognizer's error rate against the script (word error rate; character error rate for Japanese and Chinese);
+- chrF of the captions against a reference translation (character n-gram F-score, 0–100).
+
+`--source ja-JP`, `zh-CN`, `zh-TW` or `ko-KR` speaks the same passages in that language (voices Kyoko, Tingting, Meijia, Yuna) and captions them in English by default; each language's passages are the reference translation for the others.
 
 ```sh
 scripts/evaluate.py --target de --recognizer appleSpeech --vad energy --turn off --revision off
+scripts/evaluate.py --source ja-JP --revision off --engine mlx
 scripts/evaluate.py --target ja --live lmStudio --lmstudio-url http://localhost:1234 --lmstudio-model qwen/qwen3-8b
 ```
 
@@ -221,6 +265,11 @@ Debug hooks (environment variables):
 | `UT_OPEN=settings\|transcript`, `UT_SETTINGS_SECTION` | Opens a window at launch (for screenshots) |
 | `UT_PAUSE_AT=9,14` | Toggles pause at these seconds after launch |
 | `UT_TAP_PID` | Captures (and mutes) one process instead of the selected source |
+| `UT_MODELS_DIR` | Uses this folder for models |
+| `UT_IMPORT_MODEL=<model id>=<path>` | Imports a hand-downloaded model at launch (logs `IMPORT <id> ok\|failed`) |
+| `UT_TRANSCRIPTS_DIR` | Saves transcripts here instead of Documents › Universal Translator |
+| `UT_PHYSICAL_MEMORY=<GB>` | The memory the Settings memory bar measures against (to see a 16 or 8 GB Mac) |
+| `UT_PREVIEW_DIR` (tier 1) | Saves the memory bar's offscreen renderings as PNGs |
 
 `llm-bench` measures the on-device models outside the app. Build it with `xcodebuild build -scheme llm-bench -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode`, then run `.build/xcode/Build/Products/Release/llm-bench` with `DYLD_FRAMEWORK_PATH=.build/xcode/Build/Products/Release`:
 
@@ -264,7 +313,7 @@ iOS/UniversalTranslator/       the iPhone/iPad app: full-screen captions, contro
 iOS/UniversalTranslator.xcodeproj
 Sources/llm-bench/             developer benchmark
 Tests/TranslatorCoreTests/
-scripts/                       build-app.sh, build-ios.sh, package-macos.sh, release-notes.sh, evaluate.py, make-icon.swift
+scripts/                       build-app.sh, build-ios.sh, package-macos.sh, release-notes.sh, evaluate.py, make-icon.swift, icon-from-image.swift
 .github/workflows/             ci.yml (every push), release.yml (version tags)
 docs/                          RESEARCH.md, ROADMAP.md
 ```

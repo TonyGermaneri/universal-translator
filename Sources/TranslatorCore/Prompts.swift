@@ -11,6 +11,31 @@ public struct TranslationContext: Equatable, Sendable {
     }
 }
 
+/// Earlier captions a translator repeated at the end of its output. Hy-MT2 1.8B sometimes appends the translation of
+/// a context sentence ("Is there a good lunch place nearby? How long does it take?", 2026-10-25/26, both engines), and
+/// a partial clause can come back as nothing but context.
+public enum ContextEcho {
+    /// `hypothesis` without context translations repeated at its end. Never cuts into `prefix` (already on screen),
+    /// keeps a repeat the speaker actually said again (its source is in `source`), and returns a final translation
+    /// that would be left empty as it was.
+    public static func strip(_ hypothesis: String, source: String, context: [TranslationContext], prefix: String = "",
+                             isFinal: Bool) -> String {
+        let echoes = context.filter { !source.contains($0.source.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map { $0.translation.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { $0.count >= 8 }
+        var text = hypothesis.trimmingCharacters(in: .whitespacesAndNewlines)
+        var stripped = true
+        while stripped {
+            stripped = false
+            for echo in echoes where text.hasSuffix(echo) && text.count - echo.count >= prefix.count {
+                text = String(text.dropLast(echo.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                stripped = true
+            }
+        }
+        if text == hypothesis.trimmingCharacters(in: .whitespacesAndNewlines) || (isFinal && text.isEmpty) { return hypothesis }
+        return text
+    }
+}
+
 public enum Prompts {
     // MARK: Translation
 

@@ -23,13 +23,22 @@ final class AppController: NSObject, NSApplicationDelegate {
         registerHotkeys()
         settings.observe { [weak self] old, new in
             if old.hotkeys != new.hotkeys { self?.registerHotkeys() }
+            if old.menuBarOnly != new.menuBarOnly { self?.updateDockIcon() }
         }
+        updateDockIcon()
 
         // Debug hooks for screenshots: open a window at launch.
         switch ProcessInfo.processInfo.environment["UT_OPEN"] {
         case "settings": openSettings()
         case "transcript": openTranscript()
         default: break
+        }
+        // Test hook: "<model id>=<path>" imports a hand-downloaded model at launch, as Settings' Choose button does.
+        if let spec = ProcessInfo.processInfo.environment["UT_IMPORT_MODEL"],
+           let split = spec.firstIndex(of: "="),
+           let model = LocalModel.catalog.first(where: { $0.id == spec[..<split] }) {
+            let path = String(spec[spec.index(after: split)...])
+            Task { await LocalModelStore.shared.importModel(model, from: URL(fileURLWithPath: path)) }
         }
         if ProcessInfo.processInfo.environment["UT_AUTOSTART"] == "1" {
             controller.start()
@@ -47,6 +56,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // First: unloading models has once taken over 10 s.
+        controller.transcript.end()
         LocalModelStore.shared.unloadAll()
         settings.saveNow()
     }
@@ -69,7 +80,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     func showSampleCaptions() {
-        captions.showDemo(targetLanguage: settings.settings.targetLanguage)
+        captions.showDemo(targetLanguage: settings.settings.targetLanguage, sourceLanguage: settings.settings.sourceLocale)
         overlay.setShown(true)
     }
 
@@ -86,7 +97,9 @@ final class AppController: NSObject, NSApplicationDelegate {
             window.center()
             window.setFrameAutosaveName("SettingsWindow")
             settingsWindow = window
+            observeClose(of: window)
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -102,9 +115,73 @@ final class AppController: NSObject, NSApplicationDelegate {
             window.center()
             window.setFrameAutosaveName("TranscriptWindow")
             transcriptWindow = window
+            observeClose(of: window)
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         transcriptWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// In the Dock (and ⌘-Tab) like any app, until it's quit: a crowded menu bar can hide the menu bar icon entirely.
+    /// With `menuBarOnly`, a menu bar app that's in the Dock only while one of its windows is open (minimized
+    /// included), so it's still easy to get back to.
+    private func updateDockIcon() {
+        let windowOpen = [settingsWindow, transcriptWindow].contains { $0?.isVisible == true || $0?.isMiniaturized == true }
+        let policy = Self.dockPolicy(menuBarOnly: settings.settings.menuBarOnly, windowOpen: windowOpen)
+        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
+    }
+
+    nonisolated static func dockPolicy(menuBarOnly: Bool, windowOpen: Bool) -> NSApplication.ActivationPolicy {
+        menuBarOnly && !windowOpen ? .accessory : .regular
+    }
+
+    // MARK: Dock menu
+
+    /// What the Dock icon's menu offers, so the essentials don't depend on finding the menu bar icon. (Clicking the
+    /// icon opens Settings; macOS adds Quit.)
+    enum DockAction: Equatable {
+        case startListening, stopListening, showCaptions, hideCaptions, showSampleCaptions, showTranscript
+
+        var title: String {
+            switch self {
+            case .startListening: return "Start Listening"
+            case .stopListening: return "Stop Listening"
+            case .showCaptions: return "Show Captions"
+            case .hideCaptions: return "Hide Captions"
+            case .showSampleCaptions: return "Show Sample Captions"
+            case .showTranscript: return "Show Transcript"
+            }
+        }
+    }
+
+    /// Sample captions are there to be positioned: hovering over them shows the move grip.
+    nonisolated static func dockActions(listening: Bool, shown: Bool) -> [DockAction] {
+        [listening ? .stopListening : .startListening, shown ? .hideCaptions : .showCaptions, .showSampleCaptions,
+         .showTranscript]
+    }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        for action in Self.dockActions(listening: controller.isListening, shown: overlay.isShownByUser) {
+            menu.addItem(ClosureMenuItem(action.title) { [weak self] in self?.perform(action) })
+        }
+        return menu
+    }
+
+    private func perform(_ action: DockAction) {
+        switch action {
+        case .startListening, .stopListening: controller.toggle()
+        case .showCaptions, .hideCaptions: overlay.toggleShown()
+        case .showSampleCaptions: showSampleCaptions()
+        case .showTranscript: openTranscript()
+        }
+    }
+
+    private func observeClose(of window: NSWindow) {
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            // Still visible while closing; check once it's gone.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.updateDockIcon() } }
+        }
     }
 
     func exportTranscript() {
@@ -137,4 +214,19 @@ final class AppController: NSObject, NSApplicationDelegate {
             NSAlert(error: error).runModal()
         }
     }
+}
+
+/// A menu item that runs a closure (the Dock menu's items).
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("not used from a nib") }
+
+    @objc private func run() { handler() }
 }

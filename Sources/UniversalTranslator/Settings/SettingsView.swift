@@ -129,6 +129,13 @@ struct GeneralSettings: View {
                 Note("Recognizes your speech on your Mac and translates it while you're still talking. Nothing leaves your Mac unless you pick a translator on another machine.")
             }
 
+            if !Platform.hasAppleModels, requiredModels.contains(where: { LocalModelStore.shared.state($0) != .ready }) {
+                Section("Before you start") {
+                    ForEach(requiredModels) { ModelRow(model: $0, store: LocalModelStore.shared) }
+                    Note("Apple's built-in speech recognition and translation need macOS 26, so on this Mac these models do the work. Download them to start listening.")
+                }
+            }
+
             Section("Languages") {
                 Picker("I speak", selection: $store.settings.sourceLocale) {
                     if !speechLocales.contains(where: { $0.identifier(.bcp47) == store.settings.sourceLocale }) {
@@ -136,7 +143,7 @@ struct GeneralSettings: View {
                     }
                     ForEach(speechLocales, id: \.self) { locale in
                         let id = locale.identifier(.bcp47)
-                        Text(displayName(id) + (installedSpeech.contains(id) ? "" : "  (downloads on first use)")).tag(id)
+                        Text(displayName(id) + (installedSpeech.contains(id) || !Platform.hasAppleModels ? "" : "  (downloads on first use)")).tag(id)
                     }
                 }
                 Picker("Translate to", selection: $store.settings.targetLanguage) {
@@ -147,11 +154,15 @@ struct GeneralSettings: View {
                         Text(LanguageNames.name(lang.minimalIdentifier)).tag(lang.minimalIdentifier)
                     }
                 }
+                ReadingAidPickers(store: store)
+                if !ReadingAidPickers.languages(store.settings).isEmpty {
+                    Note(ReadingAidPickers.note)
+                }
             }
 
             Section("Speech recognition") {
                 Picker("Recognizer", selection: $store.settings.recognizer) {
-                    ForEach(SpeechRecognizerKind.allCases) { Text($0.title).tag($0) }
+                    ForEach(SpeechRecognizerKind.selectable) { Text($0.title).tag($0) }
                 }
                 switch store.settings.recognizer {
                 case .appleSpeech:
@@ -160,7 +171,9 @@ struct GeneralSettings: View {
                     let model = LocalModel.nemotron(for: store.settings.sourceLocale)
                     ModelRow(model: model, store: LocalModelStore.shared)
                     if LocalModelStore.shared.state(model) != .ready {
-                        Label("Apple Speech is used until the model is downloaded.", systemImage: "arrow.down.circle")
+                        Label(Platform.hasAppleModels ? "Apple Speech is used until the model is downloaded."
+                                                      : "Download the model to start listening.",
+                              systemImage: "arrow.down.circle")
                             .foregroundStyle(.orange)
                     }
                     Note("NVIDIA's streaming speech model on the Neural Engine. Words arrive every 0.56 s and are never revised, so captions start sooner and change less, and it was the most accurate in our tests.")
@@ -216,6 +229,7 @@ struct GeneralSettings: View {
 
             Section("Startup") {
                 Toggle("Start listening when the app launches", isOn: $store.settings.startListeningAtLaunch)
+                Toggle("Menu bar only (no Dock icon while no window is open)", isOn: $store.settings.menuBarOnly)
                 Toggle("Open at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
                         do {
@@ -224,14 +238,34 @@ struct GeneralSettings: View {
                             launchAtLogin = SMAppService.mainApp.status == .enabled
                         }
                     }
+                Note("Closing this window keeps Universal Translator running, in the Dock and the menu bar; quit it with ⌘Q or from either menu. In menu bar only mode, note that on a Mac with a notch macOS hides menu bar icons that don't fit; open the app again from Spotlight or Finder to bring back Settings.")
+            }
+
+            Section("Transcript") {
+                Toggle("Save the transcript of each session automatically", isOn: $store.settings.saveTranscript)
+                HStack {
+                    Note("One text file each time you start listening, in Documents › Universal Translator: the time each sentence began, what was said, and its translation. It's updated as you go, including when the second pass revises a sentence.")
+                    Spacer()
+                    Button("Show in Finder") {
+                        let folder = TranscriptAutosave.defaultFolder
+                        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(folder)
+                    }
+                }
             }
         }
         .task {
             devices = AudioDevices.inputDevices()
             apps = AudioProcesses.apps()
-            speechLocales = await SpeechTranscriber.supportedLocales
-                .sorted { displayName($0.identifier(.bcp47)) < displayName($1.identifier(.bcp47)) }
-            installedSpeech = Set(await SpeechTranscriber.installedLocales.map { $0.identifier(.bcp47) })
+            let locales: [Locale]
+            if #available(macOS 26, *) {
+                locales = await SpeechTranscriber.supportedLocales
+                installedSpeech = Set(await SpeechTranscriber.installedLocales.map { $0.identifier(.bcp47) })
+            } else {
+                // Nemotron's languages: it's the only recognizer before macOS 26.
+                locales = NemotronRecognizer.supportedLocales.map(Locale.init(identifier:))
+            }
+            speechLocales = locales.sorted { displayName($0.identifier(.bcp47)) < displayName($1.identifier(.bcp47)) }
             var seen = Set<String>()
             targets = await LanguageAvailability().supportedLanguages
                 .filter { seen.insert($0.minimalIdentifier).inserted }
@@ -242,4 +276,7 @@ struct GeneralSettings: View {
     private func displayName(_ id: String) -> String {
         Locale(identifier: "en").localizedString(forIdentifier: id) ?? id
     }
+
+    /// What listening needs before macOS 26, where there's no Apple Speech or Translation to fall back on.
+    private var requiredModels: [LocalModel] { TranslatorController.requiredModels(for: store.settings) }
 }

@@ -24,8 +24,20 @@ APP="$OUT_DIR/$APP_NAME.app"
 # xcodebuild rather than `swift build`: only xcodebuild compiles MLX's Metal shaders. (On a fresh Xcode, run
 # `sudo xcodebuild -runFirstLaunch` and `xcodebuild -downloadComponent MetalToolchain` once.)
 DERIVED=".build/xcode"
+# Swift < 6.3 (Xcode 26.3 and earlier, e.g. on macOS 15) needs the patched mlx-swift copy Package.swift points at.
+SWIFT_VERSION="$(xcrun swift -version 2>&1 | sed -nE 's/.*Apple Swift version ([0-9]+)\.([0-9]+).*/\1 \2/p')"
+read -r SWIFT_MAJOR SWIFT_MINOR <<< "$SWIFT_VERSION"
+if (( SWIFT_MAJOR < 6 || (SWIFT_MAJOR == 6 && SWIFT_MINOR < 3) )); then
+    scripts/vendor-mlx-swift.sh
+    # With the local override, resolution drops the mlx-swift pin from Package.resolved; put the checked-in file back.
+    RESOLVED_BACKUP="$(mktemp)"
+    cp Package.resolved "$RESOLVED_BACKUP"
+    trap 'cp "$RESOLVED_BACKUP" Package.resolved; rm -f "$RESOLVED_BACKUP"' EXIT
+fi
 xcodebuild build -scheme UniversalTranslator -configuration Release -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath "$DERIVED" -skipMacroValidation -skipPackagePluginValidation -quiet
+# Restored now rather than at exit, so the health check below sees the checked-in file.
+if [[ -n "${RESOLVED_BACKUP:-}" ]]; then cp "$RESOLVED_BACKUP" Package.resolved; fi
 BIN_DIR="$DERIVED/Build/Products/Release"
 
 rm -rf "$APP"
@@ -53,6 +65,11 @@ fi
 sed -e "s/__BUNDLE_ID__/$BUNDLE_ID/" -e "s/__BUILD_NUMBER__/$(date +%Y%m%d%H%M)/" \
     Resources/Info.plist > "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$APP/Contents/Info.plist"
+# Which build this is, for Settings → Permissions & About and the zip's name: "v0.1.0-23-gd7ab774" (23 commits after
+# the v0.1.0 tag, at d7ab774; "-dirty" with uncommitted changes). Every build since v0.1.0 said only "0.1.0".
+BUILD_DESCRIBE="${BUILD_DESCRIBE:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+export BUILD_DESCRIBE   # Tests/tier2/check.sh compares the app's stamp with it
+/usr/libexec/PlistBuddy -c "Add :UTBuildDescription string $BUILD_DESCRIBE" "$APP/Contents/Info.plist"
 if [[ ! -f Resources/AppIcon.icns ]]; then
     swift scripts/make-icon.swift Resources/AppIcon.icns
 fi
@@ -78,6 +95,8 @@ else
 fi
 codesign --verify --deep --strict "$APP"
 echo "Built $APP ($SHORT_VERSION)"
+# Tier 2: deployment target, weak links, bundled shaders, pins (Tests/tier2/check.sh).
+Tests/tier2/check.sh "$APP"
 
 case "${1:-}" in
     --run)

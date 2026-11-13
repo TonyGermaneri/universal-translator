@@ -30,12 +30,13 @@ struct TranslationSettingsView: View {
 
             Section {
                 Picker("Live translation", selection: $store.settings.translation.backend) {
-                    ForEach(TranslatorKind.allCases) { Text($0.title).tag($0) }
+                    ForEach(TranslatorKind.selectable) { Text($0.title).tag($0) }
                 }
                 Note(backendNote)
                 if store.settings.translation.backend == .localLLM, localModels.state(smallModel) != .ready {
                     HStack {
-                        Label("Apple Translation is used until \(smallModel.name) is downloaded.",
+                        Label(Platform.hasAppleModels ? "Apple Translation is used until \(smallModel.name) is downloaded."
+                                                      : "Download \(smallModel.name) to start listening.",
                               systemImage: "arrow.down.circle")
                             .foregroundStyle(.orange)
                         Spacer()
@@ -50,7 +51,7 @@ struct TranslationSettingsView: View {
 
             Section {
                 Picker("Second pass", selection: $store.settings.translation.revision) {
-                    ForEach(RevisionBackend.allCases) { Text($0.title).tag($0) }
+                    ForEach(RevisionBackend.selectable) { Text($0.title).tag($0) }
                 }
                 if store.settings.translation.revision == .localLLMLarge, localModels.state(largeModel) != .ready {
                     HStack {
@@ -64,9 +65,12 @@ struct TranslationSettingsView: View {
                     }
                 }
                 Note("When a sentence ends, a stronger translator translates it again with the earlier sentences as context. If the meaning changed, the caption is revised in place and the changed words are briefly highlighted. That happens at most once per sentence, and only while the sentence is still on screen.")
+                Note(secondPassMemoryNote)
             } header: {
                 Text("After each sentence")
             }
+
+            MemorySection(settings: store.settings)
 
             Section {
                 Picker("Engine", selection: $store.settings.translation.localEngine) {
@@ -82,36 +86,45 @@ struct TranslationSettingsView: View {
                 Text("On-device translation models")
             }
 
-            Section("Apple Translation · \(pairName)") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Standard model")
-                        Text(appleStatusText).font(.caption).foregroundStyle(.secondary)
+            // Apple Translation needs macOS 26 (before that, only through SwiftUI, not the sessions this app uses).
+            if Platform.hasAppleModels {
+                Section("Apple Translation · \(pairName)") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Standard model")
+                            Text(appleStatusText).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if appleStatus == .supported {
+                            Button("Download…") { requestDownload() }
+                        }
                     }
-                    Spacer()
-                    if appleStatus == .supported {
-                        Button("Download…") { requestDownload() }
+                    #if compiler(>=6.3)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Low-latency model")
+                            Text(fastStatusText).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if fastStatus == .supported {
+                            Button("Download…") { requestFastDownload() }
+                        }
                     }
+                    Note("Live captions use the low-latency model (about 30–150 ms per update) when it's downloaded, and the standard model otherwise. The high-fidelity second pass uses the standard model.")
+                    #else
+                    Note("Live captions use the standard model. This build (made with the macOS 26.2 SDK) can't use the low-latency model.")
+                    #endif
                 }
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Low-latency model")
-                        Text(fastStatusText).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if fastStatus == .supported {
-                        Button("Download…") { requestFastDownload() }
-                    }
+                .translationTask(downloadConfig) { session in
+                    try? await session.prepareTranslation()
+                    await refreshAppleStatus()
                 }
-                Note("Live captions use the low-latency model (about 30–150 ms per update) when it's downloaded, and the standard model otherwise. The high-fidelity second pass uses the standard model.")
-            }
-            .translationTask(downloadConfig) { session in
-                try? await session.prepareTranslation()
-                await refreshAppleStatus()
-            }
-            .translationTask(fastDownloadConfig) { session in
-                try? await session.prepareTranslation()
-                await refreshAppleStatus()
+                #if compiler(>=6.3)
+                .translationTask(fastDownloadConfig) { session in
+                    try? await session.prepareTranslation()
+                    await refreshAppleStatus()
+                }
+                #endif
             }
 
             Section {
@@ -147,6 +160,12 @@ struct TranslationSettingsView: View {
 
     private var smallModel: LocalModel { LocalModel.live(store.settings.translation.localEngine) }
     private var largeModel: LocalModel { LocalModel.reviser(store.settings.translation.localEngine) }
+    /// Measured 2026-10-26: the 7B lifts chrF by 1.5-2.5 points (Japanese 62.1 → 64.6) and takes the app from about
+    /// 1.6 GB to 6.4 GB.
+    private var secondPassMemoryNote: String {
+        "Memory: \(largeModel.name) needs about \(MemoryEstimate.gigabytes(largeModel.bytes)) more while listening; "
+            + "Off adds nothing, and the 1.8B model shares live translation's when that runs on-device too. See the bar below."
+    }
 
     private var engineNote: String {
         switch store.settings.translation.localEngine {
@@ -236,6 +255,7 @@ struct TranslationSettingsView: View {
         }
     }
 
+    #if compiler(>=6.3)
     private func requestFastDownload() {
         if fastDownloadConfig == nil {
             fastDownloadConfig = TranslationSession.Configuration(source: source, target: target, preferredStrategy: .lowLatency)
@@ -243,6 +263,7 @@ struct TranslationSettingsView: View {
             fastDownloadConfig?.invalidate()
         }
     }
+    #endif
 
     private func requestDownload() {
         if downloadConfig == nil {
@@ -253,8 +274,11 @@ struct TranslationSettingsView: View {
     }
 
     private func refreshAppleStatus() async {
+        guard Platform.hasAppleModels else { return }
         appleStatus = await LanguageAvailability().status(from: source, to: target)
+        #if compiler(>=6.3)
         fastStatus = await LanguageAvailability(preferredStrategy: .lowLatency).status(from: source, to: target)
+        #endif
     }
 
     private func loadModels() async {
@@ -287,12 +311,38 @@ struct TranslationSettingsView: View {
     }
 }
 
-/// One downloadable on-device model with its status and actions.
+/// One downloadable on-device model with its status and actions, and on the Mac a way to download it by hand
+/// (for networks the app's own download can't get through) and import the result.
 struct ModelRow: View {
     let model: LocalModel
     let store: LocalModelStore
+    @State private var showManual = false
+    @State private var scriptError: String?
+    /// What the copy button just did.
+    @State private var copied: String?
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            statusRow
+            #if os(macOS)
+            if store.state(model) != .ready, !isBusy {
+                DisclosureGroup("Download it yourself", isExpanded: $showManual) { manualSteps }
+                    .font(.caption)
+            }
+            #endif
+        }
+        .onAppear { if case .failed = store.state(model) { showManual = true } }
+        .onChange(of: store.state(model)) { _, state in if case .failed = state { showManual = true } }
+    }
+
+    private var isBusy: Bool {
+        switch store.state(model) {
+        case .downloading, .verifying: return true
+        default: return false
+        }
+    }
+
+    private var statusRow: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.name)
@@ -318,6 +368,9 @@ struct ModelRow: View {
                 ProgressView(value: fraction).frame(width: 110)
                 Text(Fmt.percent(fraction)).font(.caption).monospacedDigit().frame(width: 36)
                 Button("Cancel") { store.cancelDownload(model) }.buttonStyle(.borderless)
+            case .verifying:
+                ProgressView().controlSize(.small)
+                Text("Checking files…").font(.caption).foregroundStyle(.secondary)
             case .notDownloaded, .failed:
                 Button("Download (\(ByteCountFormatter.string(fromByteCount: model.bytes, countStyle: .file)))") {
                     store.download(model)
@@ -328,6 +381,62 @@ struct ModelRow: View {
     }
 
     private var tooLarge: Bool { !LocalModelStore.fitsInMemory(model) }
+
+    #if os(macOS)
+    private var manualSteps: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(model.isSingleFile
+                 ? "If the download fails (for example behind a network proxy), run this in Terminal, then choose the file it makes. Every file's checksum is checked before it's used."
+                 : "If the download fails (for example behind a network proxy): this model is \(model.files.count) files, so the button below saves a download script to your Downloads folder and copies the one line that runs it. Paste that into Terminal, then choose the folder it makes. Anything after the script name goes to every curl (for example --cacert for a proxy's certificate). Every file's checksum is checked before it's used.")
+                .foregroundStyle(.secondary)
+            Text(model.downloadCommands())
+                .font(.system(.caption2, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+            HStack {
+                Button(model.isSingleFile ? "Copy command" : "Save script to Downloads & copy command") { copyCommand() }
+                Button(model.isSingleFile ? "Choose \(model.localName)…" : "Choose the \(model.localName) folder…") { choose() }
+            }
+            if let error = scriptError ?? store.importErrors[model.id] {
+                Text(error).foregroundStyle(.red)
+            } else if let copied {
+                Text(copied).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// Copies the command; for a folder model, first saves the script it runs into Downloads.
+    private func copyCommand() {
+        scriptError = nil
+        copied = "Copied. Paste it into Terminal."
+        if !model.isSingleFile {
+            do {
+                guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
+                let script = try model.saveDownloadScript(in: downloads)
+                copied = "Saved \(script.lastPathComponent) in Downloads, and copied the command that runs it. Paste it into Terminal."
+            } catch {
+                scriptError = "Couldn't save the download script: \(error.localizedDescription)"
+                return
+            }
+        }
+        Platform.copyToPasteboard(model.downloadCommands())
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = model.isSingleFile
+        panel.canChooseDirectories = !model.isSingleFile
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.message = model.isSingleFile ? "Choose \(model.localName)" : "Choose the \(model.localName) folder"
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await store.importModel(model, from: url) }
+    }
+    #endif
 }
 
 /// Editable list of glossary terms.

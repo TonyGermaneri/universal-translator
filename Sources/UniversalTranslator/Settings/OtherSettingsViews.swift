@@ -14,7 +14,7 @@ struct ShortcutSettings: View {
                 HotkeyRecorder(title: "Start / stop listening", hotkey: $store.settings.hotkeys.toggleListening)
                 HotkeyRecorder(title: "Pause / resume", hotkey: $store.settings.hotkeys.pauseResume)
                 HotkeyRecorder(title: "Show / hide overlay", hotkey: $store.settings.hotkeys.toggleOverlay)
-                HotkeyRecorder(title: "Lock / unlock overlay", hotkey: $store.settings.hotkeys.toggleLock)
+                HotkeyRecorder(title: "Lock / unlock caption position", hotkey: $store.settings.hotkeys.toggleLock)
                 HotkeyRecorder(title: "Clear captions", hotkey: $store.settings.hotkeys.clearCaptions)
                 HotkeyRecorder(title: "Show transcript", hotkey: $store.settings.hotkeys.showTranscript)
             } footer: {
@@ -57,7 +57,7 @@ struct AboutSettings: View {
                         }
                     }
                 }
-                LabeledContent("On-device speech recognition", value: SpeechTranscriber.isAvailable ? "Available" : "Unavailable")
+                LabeledContent("On-device speech recognition", value: speechText)
                 LabeledContent("Apple Intelligence model", value: fmText)
                 Note("Universal Translator doesn't need Accessibility or Input Monitoring access. It never reads or sends keystrokes.")
             }
@@ -71,7 +71,15 @@ struct AboutSettings: View {
             }
 
             Section("About") {
-                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
+                LabeledContent("Version") {
+                    HStack {
+                        Text(AppVersion.current).textSelection(.enabled)
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(AppVersion.current, forType: .string)
+                        }
+                    }
+                }
                 Note("Speech recognition: NVIDIA Nemotron 3.5 Streaming (Core ML, via FluidAudio) or Apple SpeechAnalyzer · Voice and end of turn: Silero VAD v6, Smart Turn v3.2 · Translation: Tencent Hy-MT2 1.8B / 7B (llama.cpp), Apple Translation, Apple Intelligence, or LM Studio · Policy: target-side local agreement with a forced prefix (IWSLT 2025/2026).")
             }
         }
@@ -88,7 +96,13 @@ struct AboutSettings: View {
         }
     }
 
+    private var speechText: String {
+        guard #available(macOS 26, *) else { return "Needs macOS 26 (Nemotron is used)" }
+        return SpeechTranscriber.isAvailable ? "Available" : "Unavailable"
+    }
+
     private var fmText: String {
+        guard #available(macOS 26, *) else { return "Needs macOS 26" }
         switch SystemLanguageModel.default.availability {
         case .available: return "Available"
         case .unavailable(let reason): return "Unavailable (\(reason))"

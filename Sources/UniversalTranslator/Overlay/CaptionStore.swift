@@ -59,6 +59,10 @@ final class CaptionStore {
     var lag: Double = 0
     var status: Status = .idle
     var isDemo = false
+    /// Called when a sentence finishes, or changes after finishing (second-pass revision, corrected original).
+    @ObservationIgnored var onFinishedSentenceChange: ((Sentence) -> Void)?
+    /// The session the sample captions stand in for while they're shown; it comes back when they go.
+    @ObservationIgnored private var hiddenByDemo: (sentences: [Sentence], pauses: [Double])?
     @ObservationIgnored private var pendingBreak = false
     @ObservationIgnored private var sessionStart = Date()
     var sessionStartDate: Date { sessionStart }
@@ -148,6 +152,7 @@ final class CaptionStore {
     }
 
     func updateCurrent(committed: String, ghost: String) {
+        if isDemo { clear() }
         guard let i = sentences.indices.last, !sentences[i].isFinished else { return }
         var s = sentences[i]
         if committed.count > s.committed.count {
@@ -166,6 +171,7 @@ final class CaptionStore {
     /// (`replaced`), the change is highlighted like a revision instead of swapping text silently. `speechEnd`: where
     /// its speech ended on the audio timeline.
     func finishCurrent(source: String, translation: String, replaced: Bool = false, speechEnd: Double? = nil) {
+        if isDemo { clear() }
         guard let i = sentences.indices.last, !sentences[i].isFinished else { return }
         var s = sentences[i]
         if replaced, !s.committed.isEmpty {
@@ -183,6 +189,7 @@ final class CaptionStore {
         s.speechEnd = speechEnd
         sentences[i] = s
         DebugLog.write(String(format: "SENTENCE speech end %.2f | %@", s.speechEnd ?? -1, source))
+        onFinishedSentenceChange?(s)
         touch()
     }
 
@@ -190,8 +197,10 @@ final class CaptionStore {
 
     /// Replaces a finished sentence's original text with the recognizer's final (more accurate) transcript.
     func correctSource(_ id: UUID, source: String) {
+        if isDemo { clear() }
         guard let i = sentences.lastIndex(where: { $0.id == id }), sentences[i].source != source else { return }
         sentences[i].source = source
+        if sentences[i].isFinished { onFinishedSentenceChange?(sentences[i]) }
         touch()
     }
 
@@ -208,12 +217,14 @@ final class CaptionStore {
     }
 
     func revise(_ id: UUID, translation: String, changed: [Range<Int>]) {
+        if isDemo { clear() }
         guard let i = sentences.firstIndex(where: { $0.id == id }) else { return }
         var s = sentences[i]
         markRevision(&s, old: s.committed, new: translation, changed: changed)
         s.committed = translation
         s.revisions += 1
         sentences[i] = s
+        if s.isFinished { onFinishedSentenceChange?(s) }
         touch()
     }
 
@@ -275,6 +286,12 @@ final class CaptionStore {
     }
 
     func clear() {
+        // Sample captions were standing in for the session: put it back (off screen, like any cleared captions).
+        if isDemo, let hidden = hiddenByDemo {
+            sentences = hidden.sentences
+            pauses = hidden.pauses
+        }
+        hiddenByDemo = nil
         isDemo = false
         paragraphStart = sentences.count
         liveSource = ""
@@ -289,6 +306,7 @@ final class CaptionStore {
         paragraphStart = 0
         liveSource = ""
         isDemo = false
+        hiddenByDemo = nil
         lag = 0
         clearCount += 1
         scrollingUntil = 0
@@ -306,8 +324,11 @@ final class CaptionStore {
 
     // MARK: Export
 
+    /// The session's sentences, also while sample captions stand in for them on screen.
+    var sessionSentences: [Sentence] { isDemo ? hiddenByDemo?.sentences ?? [] : sentences }
+
     var sessionEntries: [SessionEntry] {
-        sentences.filter(\.isFinished).map {
+        sessionSentences.filter(\.isFinished).map {
             SessionEntry(start: $0.startedAt.timeIntervalSince(sessionStart),
                          end: ($0.finishedAt ?? $0.startedAt).timeIntervalSince(sessionStart),
                          source: $0.source, translation: $0.committed)
@@ -316,10 +337,16 @@ final class CaptionStore {
 
     // MARK: Demo
 
-    func showDemo(targetLanguage: String) {
-        resetSession()
+    /// Sample captions, standing in for the session's on screen until they're cleared or speech goes on; the
+    /// session itself (transcript, export) is kept.
+    func showDemo(targetLanguage: String, sourceLanguage: String = "en") {
+        if !isDemo { hiddenByDemo = (sentences, pauses) }
         isDemo = true
-        let samples = DemoText.sample(for: targetLanguage)
+        pauses = []
+        liveSource = ""
+        clearCount += 1
+        scrollingUntil = 0
+        let samples = DemoText.sample(for: targetLanguage, from: sourceLanguage)
         var first = Sentence(source: samples.source1, startedAt: Date())
         first.committed = samples.target1
         first.isFinished = true
@@ -327,6 +354,7 @@ final class CaptionStore {
         second.committed = samples.target2Committed
         second.ghost = samples.target2Ghost
         sentences = [first, second]
+        paragraphStart = 0
         touch()
     }
 }
@@ -334,7 +362,19 @@ final class CaptionStore {
 enum DemoText {
     struct Sample { var source1, target1, source2, target2Committed, target2Ghost: String }
 
-    static func sample(for language: String) -> Sample {
+    /// Sample captions in `language`; the original speech is English, or Japanese or Chinese when that's the speech
+    /// language (so its reading aid shows too).
+    static func sample(for language: String, from source: String = "en") -> Sample {
+        var sample = translated(language)
+        if let speech = ["ja", "zh"].first(where: { source.hasPrefix($0) }), !language.hasPrefix(speech) {
+            let spoken = translated(speech)
+            sample.source1 = spoken.target1
+            sample.source2 = spoken.target2Committed + spoken.target2Ghost
+        }
+        return sample
+    }
+
+    private static func translated(_ language: String) -> Sample {
         let s1 = "Thanks everyone for joining today."
         let s2 = "Let's start with a quick look at the"
         switch String(language.prefix(2)) {

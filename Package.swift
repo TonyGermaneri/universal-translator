@@ -1,9 +1,18 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
+// Swift < 6.3 (Xcode 26.3, the newest that runs on macOS 15) can't read mlx-swift's 6.3 manifest. A local copy at the
+// pinned revision with only the tools-version line lowered (scripts/vendor-mlx-swift.sh) stands in for it; a root
+// path dependency with the same identity overrides the one mlx-swift-lm declares. Swift 6.3+ builds are unaffected.
+#if compiler(>=6.3)
+let legacyToolchainOverrides: [Package.Dependency] = []
+#else
+let legacyToolchainOverrides: [Package.Dependency] = [.package(path: ".build/vendor/mlx-swift")]
+#endif
+
 let package = Package(
     name: "UniversalTranslator",
-    platforms: [.macOS("26.4"), .iOS("26.4")],
+    platforms: [.macOS(.v15), .iOS("26.4")],
     products: [
         .executable(name: "UniversalTranslator", targets: ["UniversalTranslator"]),
         // Everything the iPhone and iPad app (iOS/UniversalTranslator.xcodeproj) links.
@@ -15,7 +24,7 @@ let package = Package(
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7", traits: []),
         // MLX: the alternative on-device engine for the translation models. The Foundation Models adapter is left out.
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", exact: "3.32.3", traits: []),
-    ],
+    ] + legacyToolchainOverrides,
     targets: [
         // Platform-agnostic logic: transcript model, chunking, VAD math, prompts, LM Studio client.
         .target(
@@ -67,6 +76,13 @@ let package = Package(
         .testTarget(
             name: "TranslatorCoreTests",
             dependencies: ["TranslatorCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // The Mac app's own decisions (engine choices with and without Apple's macOS 26 models, the Dock), through
+        // `@testable import` of the executable.
+        .testTarget(
+            name: "UniversalTranslatorTests",
+            dependencies: ["UniversalTranslator"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

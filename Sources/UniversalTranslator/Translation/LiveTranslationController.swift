@@ -84,27 +84,21 @@ final class LiveTranslationController {
         let models = LocalModelStore.shared
         let small = LocalModel.live(s.translation.localEngine)
         let large = LocalModel.reviser(s.translation.localEngine)
-        var backend = s.translation.backend
-        if backend == .localLLM, !models.isDownloaded(small) {
-            backend = .apple
-            notice = "Using Apple Translation until \(small.name) is downloaded (Settings → Translation)."
-        }
-        var revision = s.translation.revision
-        if revision == .localLLMLarge, !models.isDownloaded(large) {
-            // Apple's reviser disagrees with an LLM's wording too often to be worth the churn.
-            revision = backend == .localLLM ? .off : .appleHighFidelity
-        }
-        if revision == .localLLMSmall, !models.isDownloaded(small) { revision = .appleHighFidelity }
+        let choice = try Self.translators(backend: s.translation.backend, revision: s.translation.revision, small: small,
+                                          smallReady: models.isDownloaded(small), largeReady: models.isDownloaded(large),
+                                          hasAppleModels: Platform.hasAppleModels)
+        let backend = choice.backend, revision = choice.revision
+        notice = choice.notice
 
         let live: SentenceTranslator = switch backend {
         case .localLLM:
             LocalLLMTranslator(model: small, targetName: targetName, targetCode: s.targetLanguage,
                                glossary: s.translation.glossary, style: s.translation.customInstructions)
-        case .apple: AppleTranslator(source: source, target: target, lowLatency: true)
+        case .apple: try Self.appleTranslator(source: source, target: target, lowLatency: true)
         case .appleIntelligence:
-            FoundationModelTranslator(sourceName: sourceName, targetName: targetName,
-                                      customInstructions: s.translation.customInstructions, hint: profile.promptHint,
-                                      glossary: s.translation.glossary)
+            try Self.foundationModelTranslator(sourceName: sourceName, targetName: targetName,
+                                               customInstructions: s.translation.customInstructions,
+                                               hint: profile.promptHint, glossary: s.translation.glossary)
         case .lmStudio:
             LMStudioTranslator(settings: s.translation, sourceName: sourceName, targetName: targetName,
                                targetCode: s.targetLanguage, hint: profile.promptHint)
@@ -123,11 +117,11 @@ final class LiveTranslationController {
             case .localLLMSmall:
                 LocalLLMTranslator(model: small, targetName: targetName, targetCode: s.targetLanguage,
                                    glossary: s.translation.glossary, style: s.translation.customInstructions)
-            case .appleHighFidelity: AppleTranslator(source: source, target: target, lowLatency: false)
+            case .appleHighFidelity: try Self.appleTranslator(source: source, target: target, lowLatency: false)
             case .appleIntelligence:
-                FoundationModelTranslator(sourceName: sourceName, targetName: targetName,
-                                          customInstructions: s.translation.customInstructions, hint: "",
-                                          glossary: s.translation.glossary)
+                try Self.foundationModelTranslator(sourceName: sourceName, targetName: targetName,
+                                                   customInstructions: s.translation.customInstructions, hint: "",
+                                                   glossary: s.translation.glossary)
             case .lmStudio: LMStudioTranslator(settings: s.translation, sourceName: sourceName, targetName: targetName,
                                                targetCode: s.targetLanguage, hint: "")
             }
@@ -149,8 +143,11 @@ final class LiveTranslationController {
 
     /// The engine reports the sentence in progress (stable source only) on every tick. `speechEndedAgo`: for a
     /// complete utterance, how long ago its speech ended (for latency metrics); `speechEnd`: where, on the audio
-    /// timeline.
-    func update(_ sentence: SourceFrontier.Sentence, speechEndedAgo: Double? = nil, speechEnd: Double? = nil) {
+    /// timeline. `speechStartedAgo`: how long ago the first word of the unit in progress was spoken, stable or not
+    /// (for latency metrics: in Japanese or Chinese no word is stable until the utterance ends).
+    func update(_ sentence: SourceFrontier.Sentence, speechEndedAgo: Double? = nil, speechEnd: Double? = nil,
+                speechStartedAgo: Double? = nil) {
+        if let ago = speechStartedAgo { metrics.speechStarted(at: now - ago) }
         guard !sentence.tokens.isEmpty else { return }
         latest = sentence
         latestSpeechEnd = speechEnd
@@ -223,6 +220,10 @@ final class LiveTranslationController {
             }
             guard gen == generation else { return }
             if policy.profile.unit == .character { hypothesis = TextJoiner.normalizeSpacelessSpacing(hypothesis) }
+            let echoed = hypothesis
+            hypothesis = ContextEcho.strip(hypothesis, source: request.source, context: context, prefix: request.prefix,
+                                           isFinal: request.isFinal)
+            if hypothesis != echoed { DebugLog.write("ECHO stripped | " + echoed) }
             DebugLog.write(String(format: "LIVE %4.0fms %@ | %@ → %@", (now - started) * 1000,
                                   request.isFinal ? "final" : "     ", request.source, hypothesis))
             inFlight = nil
@@ -326,6 +327,11 @@ final class LiveTranslationController {
                                   current.committed, candidate))
             if case .accept(let changed) = decision {
                 captions.revise(job.id, translation: candidate, changed: changed)
+                // For scripts/evaluate.py: the caption as revised, matched to its SENTENCE line by source.
+                let fields = ["source": job.sentence.source, "translation": candidate]
+                if let json = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) {
+                    DebugLog.write("REVISED " + String(decoding: json, as: UTF8.self))
+                }
                 policy.replaceHistory(source: job.sentence.source, translation: candidate, correctedSource: job.finalSource)
             }
         }
@@ -340,12 +346,14 @@ struct SentenceMetrics {
     private var completedAt: Double?
     private var finishedAt: Double?
     private var speechEndedAt: Double?
+    private var speechStartedAt: Double?
     private var displayed = ""
     private var displayedCommitted = ""
     private var committedLength = 0
     private var erased = 0
     private var committedErased = 0
     private var finalLength = 0
+    private var translation = ""
     private var replaced = false
 
     mutating func sourceSeen(at t: Double) {
@@ -371,10 +379,12 @@ struct SentenceMetrics {
 
     mutating func completed(at t: Double) { if completedAt == nil { completedAt = t } }
     mutating func speechEnded(at t: Double) { if speechEndedAt == nil { speechEndedAt = t } }
+    mutating func speechStarted(at t: Double) { if speechStartedAt == nil { speechStartedAt = t } }
 
     mutating func finished(at t: Double, translation: String, replaced: Bool) {
         finishedAt = t
         finalLength = translation.count
+        self.translation = translation
         self.replaced = replaced
     }
 
@@ -388,8 +398,10 @@ struct SentenceMetrics {
         func ms(_ a: Double?, _ b: Double?) -> Int { guard let a, let b else { return -1 }; return Int((b - a) * 1000) }
         let fields: [String: Any] = [
             "source": source,
-            "words": source.split(separator: " ").count,
+            "translation": translation,
+            "words": TextJoiner.wordCount(source),
             "firstOutputMs": ms(firstSourceAt, firstOutputAt),
+            "firstOutputAfterSpeechStartMs": ms(speechStartedAt, firstOutputAt),
             "finishAfterCompleteMs": ms(completedAt, finishedAt),
             "finishAfterSpeechMs": ms(speechEndedAt, finishedAt),
             "durationMs": ms(firstSourceAt, finishedAt),
@@ -401,5 +413,45 @@ struct SentenceMetrics {
         ]
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data()
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+// Apple Translation and the Apple Intelligence model need macOS 26; `configure()` doesn't choose them before that.
+extension LiveTranslationController {
+    /// The live and second-pass translators `configure()` builds, from the chosen ones and what's downloaded. With
+    /// Apple's models (macOS 26) a missing Hy-MT2 falls back to Apple Translation; without them there's no fallback.
+    nonisolated static func translators(backend: TranslatorKind, revision: RevisionBackend, small: LocalModel,
+                                        smallReady: Bool, largeReady: Bool, hasAppleModels: Bool) throws
+        -> (backend: TranslatorKind, revision: RevisionBackend, notice: String?) {
+        var backend = backend, revision = revision, notice: String?
+        if !hasAppleModels {
+            // Before macOS 26: no Apple Translation or Apple Intelligence (e.g. in settings imported from a newer
+            // Mac), and nothing to fall back on while a model downloads.
+            if backend.needsAppleModels { backend = .localLLM }
+            if revision.needsAppleModels { revision = .off }
+            if backend == .localLLM, !smallReady { throw LocalModelError.notDownloaded(small.name) }
+        }
+        if backend == .localLLM, !smallReady {
+            backend = .apple
+            notice = "Using Apple Translation until \(small.name) is downloaded (Settings → Translation)."
+        }
+        if revision == .localLLMLarge, !largeReady {
+            // Apple's reviser disagrees with an LLM's wording too often to be worth the churn.
+            revision = backend == .localLLM || !hasAppleModels ? .off : .appleHighFidelity
+        }
+        if revision == .localLLMSmall, !smallReady { revision = hasAppleModels ? .appleHighFidelity : .off }
+        return (backend, revision, notice)
+    }
+
+    static func appleTranslator(source: Locale.Language, target: Locale.Language, lowLatency: Bool) throws -> SentenceTranslator {
+        guard #available(macOS 26, *) else { throw TranslatorError.needsMacOS26("Apple Translation") }
+        return AppleTranslator(source: source, target: target, lowLatency: lowLatency)
+    }
+
+    static func foundationModelTranslator(sourceName: String, targetName: String, customInstructions: String, hint: String,
+                                          glossary: [GlossaryEntry]) throws -> SentenceTranslator {
+        guard #available(macOS 26, *) else { throw TranslatorError.needsMacOS26("The Apple Intelligence model") }
+        return FoundationModelTranslator(sourceName: sourceName, targetName: targetName,
+                                         customInstructions: customInstructions, hint: hint, glossary: glossary)
     }
 }

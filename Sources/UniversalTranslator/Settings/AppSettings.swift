@@ -36,6 +36,9 @@ enum SpeechRecognizerKind: String, Codable, CaseIterable, Identifiable {
         case .appleSpeech: return "Apple Speech (on-device, built in)"
         }
     }
+    /// The choices this system offers (Apple Speech needs macOS 26).
+    static var selectable: [Self] { choices(hasAppleModels: Platform.hasAppleModels) }
+    static func choices(hasAppleModels: Bool) -> [Self] { hasAppleModels ? allCases : [.nemotron] }
 }
 
 /// The translator that produces live captions while the speaker talks.
@@ -56,6 +59,10 @@ enum TranslatorKind: String, Codable, CaseIterable, Identifiable {
         case .none: return "None (show transcription only)"
         }
     }
+    var needsAppleModels: Bool { self == .apple || self == .appleIntelligence }
+    /// The choices this system offers (Apple Translation and Apple Intelligence need macOS 26).
+    static var selectable: [Self] { choices(hasAppleModels: Platform.hasAppleModels) }
+    static func choices(hasAppleModels: Bool) -> [Self] { hasAppleModels ? allCases : allCases.filter { !$0.needsAppleModels } }
 }
 
 /// The runtime for the on-device Hy-MT2 models. Each has its own downloads.
@@ -92,6 +99,22 @@ enum RevisionBackend: String, Codable, CaseIterable, Identifiable {
         case .lmStudio: return "LM Studio (or another OpenAI-compatible server)"
         }
     }
+    var needsAppleModels: Bool { self == .appleHighFidelity || self == .appleIntelligence }
+    /// The choices this system offers (Apple Translation and Apple Intelligence need macOS 26).
+    static var selectable: [Self] { choices(hasAppleModels: Platform.hasAppleModels) }
+    static func choices(hasAppleModels: Bool) -> [Self] { hasAppleModels ? allCases : allCases.filter { !$0.needsAppleModels } }
+}
+
+extension AppSettings {
+    /// Before macOS 26, replaces Apple's engines (in settings imported from a newer Mac) with the app's own.
+    func withoutUnavailableEngines(hasAppleModels: Bool = Platform.hasAppleModels) -> AppSettings {
+        guard !hasAppleModels else { return self }
+        var s = self
+        if !SpeechRecognizerKind.choices(hasAppleModels: false).contains(s.recognizer) { s.recognizer = .nemotron }
+        if s.translation.backend.needsAppleModels { s.translation.backend = .localLLM }
+        if s.translation.revision.needsAppleModels { s.translation.revision = .localLLMLarge }
+        return s
+    }
 }
 
 struct RGBA: Codable, Equatable {
@@ -113,6 +136,9 @@ struct RGBA: Codable, Equatable {
     }
 
     var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
+    #if os(macOS)
+    var nsColor: NSColor { NSColor(srgbRed: r, green: g, blue: b, alpha: a) }
+    #endif
 
     static let white = RGBA(1, 1, 1)
     static let black = RGBA(0, 0, 0)
@@ -294,6 +320,10 @@ struct OverlaySettings: Codable, Equatable {
     /// two). It speeds up while words are waiting to come on screen.
     var marqueeSpeed: Double = 10
     var alignment: AlignmentChoice = .center
+    /// Reading aids by base language ("ja": "furigana", "zh": "pinyin,traditional"), for every caption line in that
+    /// language: the translation and the original speech. Stored as raw values so a name this build doesn't know is
+    /// ignored, not a reset.
+    var readingAids: [String: String] = [:]
 
     // Typography
     var fontFamily: String = ""
@@ -323,7 +353,8 @@ struct OverlaySettings: Codable, Equatable {
 
     // Window behavior
     var level: OverlayLevel = .aboveEverything
-    var clickThrough: Bool = true
+    /// No move grip when hovering over the captions (they always let clicks through either way).
+    var lockPosition = false
     var allSpaces: Bool = true
     var hideFromScreenCapture: Bool = false
     var autoHide: Bool = true
@@ -342,6 +373,24 @@ struct OverlaySettings: Codable, Equatable {
     var showStatusIndicator: Bool = true
     /// A lock (everything stays on this Mac) or network symbol (text is sent elsewhere) beside the status dot.
     var showPrivacyIndicator: Bool = true
+
+    /// The reading aids turned on for caption text in `language` (any BCP-47 identifier), at most one of each kind.
+    func readingAids(for language: String) -> [ReadingAid] {
+        ReadingAid.parse(readingAids[ReadingAid.baseLanguage(language)] ?? "", language: language)
+    }
+
+    /// The language's aid of one kind (nil: off).
+    func readingAid(_ kind: ReadingAid.Kind, for language: String) -> ReadingAid? {
+        readingAids(for: language).first { $0.kind == kind }
+    }
+
+    /// Sets the language's aid of one kind and keeps its aid of the other kind. Both places that show the pickers
+    /// (General → Languages, Overlay Appearance → Reading aid) set it here.
+    mutating func setReadingAid(_ aid: ReadingAid?, _ kind: ReadingAid.Kind, for language: String) {
+        let others = readingAids(for: language).filter { $0.kind != kind }
+        let aids = (aid.map { [$0] } ?? []) + others
+        readingAids[ReadingAid.baseLanguage(language)] = aids.isEmpty ? nil : ReadingAid.stored(aids)
+    }
 }
 
 struct TranslationSettings: Codable, Equatable {
@@ -415,6 +464,10 @@ struct AppSettings: Codable, Equatable {
     var inputDeviceUID: String = ""
     var micSensitivity: Double = 0.6
     var startListeningAtLaunch: Bool = false
+    /// A menu bar app: no Dock icon unless Settings or the transcript is open (otherwise it's in the Dock until quit).
+    var menuBarOnly = false
+    /// Each listening session's transcript is saved to a text file as it goes (`TranscriptAutosave`).
+    var saveTranscript = false
     var timing = TimingSettings()
     var translation = TranslationSettings()
     var overlay = OverlaySettings()
@@ -462,10 +515,10 @@ enum OverlayPreset: String, CaseIterable, Identifiable {
 
     /// Applies the preset's look while keeping the user's display and behavior choices.
     func apply(to o: inout OverlaySettings) {
-        let keep = (o.screenMode, o.screenName, o.level, o.clickThrough, o.allSpaces, o.hideFromScreenCapture)
+        let keep = (o.screenMode, o.screenName, o.level, o.lockPosition, o.allSpaces, o.hideFromScreenCapture)
         let base = AppSettings.defaults.overlay
         o = base
-        (o.screenMode, o.screenName, o.level, o.clickThrough, o.allSpaces, o.hideFromScreenCapture) = keep
+        (o.screenMode, o.screenName, o.level, o.lockPosition, o.allSpaces, o.hideFromScreenCapture) = keep
         switch self {
         case .subtitles:
             // Roll-up captions in a centered block above the bottom edge.
